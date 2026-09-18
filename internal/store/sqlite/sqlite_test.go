@@ -80,13 +80,43 @@ func TestChecksAndHistory(t *testing.T) {
 	if err != nil || len(recent) != 5 {
 		t.Fatalf("RecentChecks = %d, %v", len(recent), err)
 	}
+}
+
+// TestPurgeUsesRollingWindow anchors purge rows to now with relative
+// offsets. Purge deletes ts < now-24h*retention regardless of wall-clock
+// hour, so calendar-day fixtures (e.g. yesterday noon) make the assertion
+// time-of-day dependent — they fail before ~12:09 UTC. Relative offsets
+// pass identically at every hour.
+func TestPurgeUsesRollingWindow(t *testing.T) {
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	old := now.Add(-25 * time.Hour).Unix()
+	fresh := now.Add(-time.Hour).Unix()
+	for i := 0; i < 3; i++ {
+		c := store.Check{ServiceID: "web", TS: old + int64(i), Up: true, LatencyMs: 5, StatusCode: 200}
+		if err := st.RecordCheck(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.RecordCheck(ctx, store.Check{ServiceID: "web", TS: fresh, Up: true, LatencyMs: 5, StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
 
 	n, err := st.Purge(ctx, 1, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 10 {
-		t.Errorf("Purge removed %d, want 10 (yesterday's)", n)
+	if n != 3 {
+		t.Errorf("Purge removed %d, want 3 (rows older than 24h)", n)
+	}
+	remaining, err := st.RecentChecks(ctx, "web", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 1 || remaining[0].TS != fresh {
+		t.Errorf("Purge kept %+v, want only the fresh row", remaining)
 	}
 }
 
