@@ -1,0 +1,26 @@
+name: Feature request
+description: New capability or general improvement
+labels: ["triage: needed", "type: enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today, as an operator?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: API shape, config keys, or behavior — ideally with an example
+    validations:
+      required: true
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Fit check
+      options:
+        - label: Works headless via the REST API (no UI-only feature)
+        - label: Doesn't fabricate history (null stays null)
+        - label: Fits the single-binary, zero-cgo constraint

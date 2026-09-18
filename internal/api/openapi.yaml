@@ -1,0 +1,533 @@
+openapi: 3.1.0
+info:
+  title: epmon API
+  version: 1.0.0
+  description: |
+    HTTP service watchdog: probe results, per-day history and a manual
+    incident log. Served live by the binary itself — this file is embedded,
+    so what you fetch is the contract of the version answering.
+servers:
+  - url: /
+tags:
+  - name: status
+    description: Current state and history of monitored services.
+  - name: incidents
+    description: Human-written incident log.
+  - name: ops
+    description: Liveness and machine-readable contract.
+paths:
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Liveness probe
+      description: Returns 503 while the database is unreachable (readiness).
+      operationId: healthz
+      responses:
+        '200':
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /api/v1/status:
+    get:
+      tags: [status]
+      summary: Aggregate status plus per-service last check
+      operationId: getStatus
+      responses:
+        '200':
+          description: Current snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/services:
+    get:
+      tags: [status]
+      summary: List monitored services with current state
+      operationId: listServices
+      responses:
+        '200':
+          description: Service inventory.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [services, total]
+                properties:
+                  services:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ServiceState'
+                  total:
+                    type: integer
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/services/{id}/history:
+    get:
+      tags: [status]
+      summary: Daily buckets plus recent raw checks
+      operationId: getHistory
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 90
+        - name: limit
+          in: query
+          description: Newest raw checks to include.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        '200':
+          description: History window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/incidents:
+    get:
+      tags: [incidents]
+      summary: List incidents, newest first
+      operationId: listIncidents
+      parameters:
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [investigating, monitoring, resolved]
+        - name: service
+          in: query
+          description: Filter by service id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Incident log.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [incidents, total]
+                properties:
+                  incidents:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Incident'
+                  total:
+                    type: integer
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [incidents]
+      summary: Open an incident (starts as investigating)
+      operationId: createIncident
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentInput'
+      responses:
+        '201':
+          description: Created. Location header points at the incident.
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/incidents/{id}:
+    get:
+      tags: [incidents]
+      summary: Fetch one incident with its updates
+      operationId: getIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      responses:
+        '200':
+          description: The incident.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [incidents]
+      summary: Mutate title, severity and/or state
+      operationId: updateIncident
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IncidentPatch'
+      responses:
+        '200':
+          description: Updated incident.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/incidents/{id}/updates:
+    post:
+      tags: [incidents]
+      summary: Append a timestamped line to the incident thread
+      operationId: addIncidentUpdate
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IncidentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              properties:
+                text:
+                  type: string
+      responses:
+        '201':
+          description: Updated incident. Location header points at it.
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/TooLarge'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /api/v1/openapi.yaml:
+    get:
+      tags: [ops]
+      summary: This contract, as YAML
+      operationId: getOpenAPIYAML
+      responses:
+        '200':
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema:
+                type: string
+  /api/v1/openapi.json:
+    get:
+      tags: [ops]
+      summary: This contract, as JSON
+      operationId: getOpenAPIJSON
+      responses:
+        '200':
+          description: The OpenAPI document.
+          content:
+            application/json:
+              schema:
+                type: object
+  /docs:
+    get:
+      tags: [ops]
+      summary: Interactive API reference (Scalar UI)
+      operationId: getDocs
+      responses:
+        '200':
+          description: HTML documentation page.
+          content:
+            text/html:
+              schema:
+                type: string
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Required for POST/PATCH when server.api_keys is set. Reads stay public.
+  parameters:
+    IncidentId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: integer
+        format: int64
+  responses:
+    BadRequest:
+      description: Invalid input.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Unknown service, incident or endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or wrong bearer key on a write endpoint.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooLarge:
+      description: Body exceeds server.max_body_bytes.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Per-IP budget exhausted. Retry after the Retry-After seconds.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: The database is unreachable.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: Storage failure.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, unauthorized, too_large, rate_limited, not_found, internal, unavailable]
+            message:
+              type: string
+    ServiceState:
+      type: object
+      required: [id, name, url]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        up:
+          type: [boolean, 'null']
+          description: Last probe result; null when never probed.
+        latency_ms:
+          type: [integer, 'null']
+        status_code:
+          type: [integer, 'null']
+          description: Last HTTP status; 0 on transport errors.
+        checked_at:
+          type: [integer, 'null']
+          description: Unix seconds of the last probe.
+        error:
+          type: string
+          description: 'Short machine-readable failure, e.g. "status: got 500".'
+    StatusResponse:
+      type: object
+      required: [checked_at, overall, services]
+      properties:
+        checked_at:
+          type: integer
+          description: Unix seconds.
+        overall:
+          type: string
+          enum: [operational, partial_outage, unknown]
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceState'
+    DayBucket:
+      type: object
+      required: [date, up, checks]
+      properties:
+        date:
+          type: string
+          format: date
+          example: '2026-09-17'
+        up:
+          type: [boolean, 'null']
+          description: Null on days without probes — never fabricated.
+        checks:
+          type: integer
+    Check:
+      type: object
+      required: [id, service_id, ts, up, latency_ms, status_code]
+      properties:
+        id:
+          type: integer
+          format: int64
+        service_id:
+          type: string
+        ts:
+          type: integer
+          description: Unix seconds.
+        up:
+          type: boolean
+        latency_ms:
+          type: integer
+        status_code:
+          type: integer
+        error:
+          type: string
+    HistoryResponse:
+      type: object
+      required: [service_id, days, uptime_pct, history, recent, total]
+      properties:
+        service_id:
+          type: string
+        days:
+          type: integer
+        uptime_pct:
+          type: ['number', 'null']
+          description: Percent over days with probes; null when none.
+        history:
+          type: array
+          items:
+            $ref: '#/components/schemas/DayBucket'
+        recent:
+          type: array
+          items:
+            $ref: '#/components/schemas/Check'
+        total:
+          type: integer
+          description: Length of recent.
+    IncidentUpdate:
+      type: object
+      required: [ts, text]
+      properties:
+        ts:
+          type: integer
+          description: Unix seconds.
+        text:
+          type: string
+    Incident:
+      type: object
+      required: [id, title, severity, state, created_at, updated_at, updates]
+      properties:
+        id:
+          type: integer
+          format: int64
+        service_id:
+          type: string
+        title:
+          type: string
+        severity:
+          type: string
+          enum: [minor, major]
+        state:
+          type: string
+          enum: [investigating, monitoring, resolved]
+        created_at:
+          type: integer
+        updated_at:
+          type: integer
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/IncidentUpdate'
+    IncidentInput:
+      type: object
+      required: [title]
+      properties:
+        service_id:
+          type: string
+        title:
+          type: string
+        severity:
+          type: string
+          enum: [minor, major]
+          default: minor
+    IncidentPatch:
+      type: object
+      minProperties: 1
+      properties:
+        title:
+          type: string
+        severity:
+          type: string
+          enum: [minor, major]
+        state:
+          type: string
+          enum: [investigating, monitoring, resolved]

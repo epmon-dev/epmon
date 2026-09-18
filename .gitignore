@@ -1,0 +1,4 @@
+/epmon
+epmon.db*
+config.yaml
+data/

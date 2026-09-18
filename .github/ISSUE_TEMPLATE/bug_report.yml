@@ -1,0 +1,33 @@
+name: Bug report
+description: Something isn't working as intended
+labels: ["triage: needed", "type: bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `git describe --tags` or the release you run
+      placeholder: v1.2.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw vs what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Smallest config + steps that trigger it (redact tokens and hosts you don't own)
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Request IDs help (every response carries X-Request-Id)
+      render: shell

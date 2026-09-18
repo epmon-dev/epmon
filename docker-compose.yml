@@ -1,0 +1,12 @@
+services:
+  epmon:
+    build: .
+    container_name: epmon
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data:rw
+      # mount your catalogue at ./data/config.yaml (or edit the path below)
+    environment:
+      TZ: "UTC"

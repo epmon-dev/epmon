@@ -1,0 +1,48 @@
+# epmon — which endpoints to watch.
+#
+# Copy to config.yaml and edit. JSON works too (config.json) — same keys.
+# Durations use Go syntax: "10s", "5m", "1h".
+
+server:
+  addr: ":8080"
+  # Writes (POST/PATCH) require one of these when set. Reads stay public.
+  # Empty = auth off (local dev only — the binary logs a warning).
+  api_keys: ["${EPMON_API_KEY}"]
+  rate_limit_rpm: 120     # per client IP (0 = default 120)
+  rate_limit_burst: 120
+  trust_proxy: false       # true only behind a proxy that sanitizes X-Forwarded-For
+  cors_allowed_origins: [] # e.g. ["https://status.example.com"]; empty = same-origin only
+  max_body_bytes: 1048576
+  # tls_cert / tls_key: serve HTTPS directly; otherwise terminate at your proxy.
+  # tls_cert: "/data/tls/cert.pem"
+  # tls_key: "/data/tls/key.pem"
+
+database:
+  driver: sqlite          # adapter name; new adapters plug in with no code changes here
+  dsn: "epmon.db"         # adapter connection string; ":memory:" disables persistence
+  retention_days: 90
+
+# Probe defaults apply to every service unless overridden per service.
+probes:
+  default_interval: 60s   # how often to probe
+  default_timeout: 10s    # per-probe deadline
+  failure_threshold: 1
+
+services:
+  - id: website
+    name: Website
+    url: https://example.com
+    body_contains: "Example Domain"   # optional: substring that must appear
+
+  - id: api
+    name: Public API
+    url: https://api.example.com/readyz
+    interval: 30s
+    expect_status: [200]
+
+  - id: insecure-dev
+    name: Dev box (self-signed)
+    url: https://dev.internal.example.com/healthz
+    insecure_skip_verify: true        # only for boxes you own
+    headers:
+      Authorization: "Bearer ${DEV_TOKEN}"
