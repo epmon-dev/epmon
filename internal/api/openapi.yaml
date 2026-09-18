@@ -224,6 +224,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '413':
           $ref: '#/components/responses/TooLarge'
         '429':
@@ -353,6 +355,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Backward incident state transition (states move forward only).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Unavailable:
       description: The database is unreachable.
       content:
@@ -376,7 +384,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, unauthorized, too_large, rate_limited, not_found, internal, unavailable]
+              enum: [bad_request, unauthorized, too_large, rate_limited, not_found, conflict, internal, unavailable]
             message:
               type: string
     ServiceState:

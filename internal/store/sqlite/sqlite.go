@@ -245,6 +245,15 @@ func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity s
 	return res.LastInsertId()
 }
 
+// incidentStateOrder ranks states for the forward-only machine:
+// investigating -> monitoring -> resolved. Skips forward are legal;
+// any backward move (including out of resolved) is rejected.
+var incidentStateOrder = map[string]int{
+	"investigating": 0,
+	"monitoring":    1,
+	"resolved":      2,
+}
+
 // UpdateIncident mutates title/severity/state; empty args keep the field.
 func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error {
 	cur, err := s.GetIncident(ctx, id)
@@ -253,6 +262,9 @@ func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, s
 	}
 	if cur == nil {
 		return store.ErrNotFound
+	}
+	if state != "" && state != cur.State && incidentStateOrder[state] < incidentStateOrder[cur.State] {
+		return &store.TransitionError{From: cur.State, To: state}
 	}
 	if title != "" {
 		cur.Title = title

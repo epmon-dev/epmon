@@ -196,6 +196,13 @@ func TestIncidentLifecycle(t *testing.T) {
 	if code, _, _ := do(t, h, "PATCH", path, `{"state":"resolved"}`); code != 200 {
 		t.Errorf("resolve = %d", code)
 	}
+	// resolved is terminal: moving back out is a 409 naming the pair.
+	if code, body, _ := do(t, h, "PATCH", path, `{"state":"investigating"}`); code != 409 ||
+		body["error"].(map[string]any)["code"] != "conflict" {
+		t.Errorf("resolved->investigating = %d %v, want 409/conflict", code, body)
+	} else if msg := body["error"].(map[string]any)["message"].(string); !strings.Contains(msg, `"resolved"`) || !strings.Contains(msg, `"investigating"`) {
+		t.Errorf("conflict message = %q, want from→to pair named", msg)
+	}
 	if code, _, _ := do(t, h, "PATCH", path, `{}`); code != 400 {
 		t.Errorf("empty patch = %d, want 400", code)
 	}

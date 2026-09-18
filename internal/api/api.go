@@ -431,6 +431,11 @@ func (s *Server) updateIncident(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "not_found", "unknown incident")
 			return
 		}
+		var terr *store.TransitionError
+		if errors.As(err, &terr) {
+			writeErr(w, http.StatusConflict, "conflict", terr.Error())
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "internal", "store write failed")
 		return
 	}
