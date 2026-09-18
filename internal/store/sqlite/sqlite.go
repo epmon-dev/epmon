@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/epmon-dev/epmon/internal/store"
 	_ "modernc.org/sqlite"
@@ -273,6 +274,9 @@ func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, s
 
 // AddIncidentUpdate appends one timestamped line to an incident's thread.
 func (s *Store) AddIncidentUpdate(ctx context.Context, id int64, text string, now time.Time) error {
+	if n := utf8.RuneCountInString(text); n < 1 || n > store.MaxUpdateRunes {
+		return fmt.Errorf("%w: update text must be 1..%d characters", store.ErrInvalid, store.MaxUpdateRunes)
+	}
 	var exists int
 	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM incidents WHERE id=?`, id).Scan(&exists); err != nil {
 		if err == sql.ErrNoRows {

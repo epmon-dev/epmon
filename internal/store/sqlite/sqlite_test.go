@@ -1,7 +1,9 @@
 package sqlite
 
 import (
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,6 +140,39 @@ func TestIncidents(t *testing.T) {
 	byOther, err := st.ListIncidents(ctx, store.IncidentFilter{ServiceID: "other"})
 	if err != nil || len(byOther) != 0 {
 		t.Errorf("filter by other service = %d, %v", len(byOther), err)
+	}
+}
+
+func TestIncidentUpdateLimits(t *testing.T) {
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	id, err := st.CreateIncident(ctx, "web", "Limits", "minor", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]struct {
+		text string
+		ok   bool
+	}{
+		"empty":                {"", false},
+		"one rune":             {"x", true},
+		"2000 runes":           {strings.Repeat("a", 2000), true},
+		"2001 runes":           {strings.Repeat("a", 2001), false},
+		"2000 multibyte runes": {strings.Repeat("é", 2000), true},
+		"2001 multibyte runes": {strings.Repeat("é", 2001), false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			err := st.AddIncidentUpdate(ctx, id, tc.text, now)
+			if tc.ok && err != nil {
+				t.Errorf("AddIncidentUpdate = %v, want nil", err)
+			}
+			if !tc.ok && !errors.Is(err, store.ErrInvalid) {
+				t.Errorf("AddIncidentUpdate = %v, want ErrInvalid", err)
+			}
+		})
 	}
 }
 

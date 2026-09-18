@@ -15,6 +15,13 @@ import (
 // ErrNotFound is returned when an incident id names nothing.
 var ErrNotFound = errors.New("store: not found")
 
+// ErrInvalid is returned when input fails domain validation
+// (e.g. over-long incident update text).
+var ErrInvalid = errors.New("store: invalid")
+
+// MaxUpdateRunes bounds incident update text to 1..2000 runes.
+const MaxUpdateRunes = 2000
+
 // Check is one recorded probe result.
 type Check struct {
 	ID         int64  `json:"id"`
