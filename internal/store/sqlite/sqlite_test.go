@@ -141,6 +141,36 @@ func TestIncidents(t *testing.T) {
 	}
 }
 
+func TestIncidentSeverityCritical(t *testing.T) {
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	id, err := st.CreateIncident(ctx, "web", "Outage", "critical", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetIncident(ctx, id)
+	if err != nil || got == nil {
+		t.Fatalf("GetIncident = %+v, %v", got, err)
+	}
+	if got.Severity != "critical" {
+		t.Errorf("severity = %q, want critical (must not downgrade to minor)", got.Severity)
+	}
+	// Unknown severities still normalize to minor at the store boundary.
+	other, err := st.CreateIncident(ctx, "web", "Weird", "urgent", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotOther, err := st.GetIncident(ctx, other)
+	if err != nil || gotOther == nil {
+		t.Fatalf("GetIncident = %+v, %v", gotOther, err)
+	}
+	if gotOther.Severity != "minor" {
+		t.Errorf("severity = %q, want minor for unknown input", gotOther.Severity)
+	}
+}
+
 func TestSyncServices(t *testing.T) {
 	st := openTest(t)
 	ctx := t.Context()

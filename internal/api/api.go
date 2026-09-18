@@ -356,8 +356,8 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "title is required")
 		return
 	}
-	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major")
+	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" && body.Severity != "critical" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major|critical")
 		return
 	}
 	id, err := s.store.CreateIncident(r.Context(), body.ServiceID, body.Title, body.Severity, s.now())
@@ -416,8 +416,8 @@ func (s *Server) updateIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "empty patch: set title, severity or state")
 		return
 	}
-	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major")
+	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" && body.Severity != "critical" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major|critical")
 		return
 	}
 	switch body.State {
