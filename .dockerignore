@@ -1,0 +1,10 @@
+# Keep the Docker build context small and secret-free.
+# The image only needs Go sources, go.mod/go.sum and static assets.
+.git/
+.gitignore
+data/
+*.db
+config.yaml
+config.json
+epmon.yaml
+*.test
