@@ -229,10 +229,10 @@ func (s *Store) Purge(ctx context.Context, retentionDays int, now time.Time) (in
 	return res.RowsAffected()
 }
 
-// CreateIncident opens a manual incident. Severity normalizes to minor
-// unless "major".
+// CreateIncident opens a manual incident. Empty severity normalizes to
+// minor; minor, major and critical round-trip verbatim.
 func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity string, now time.Time) (int64, error) {
-	if severity != "major" {
+	if severity != "major" && severity != "critical" {
 		severity = "minor"
 	}
 	res, err := s.db.ExecContext(ctx,
@@ -258,7 +258,7 @@ func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, s
 	if title != "" {
 		cur.Title = title
 	}
-	if severity == "minor" || severity == "major" {
+	if severity == "minor" || severity == "major" || severity == "critical" {
 		cur.Severity = severity
 	}
 	switch state {

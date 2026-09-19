@@ -183,7 +183,7 @@ func TestIncidentLifecycle(t *testing.T) {
 	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"severity":"major"}`); code != 400 {
 		t.Errorf("create without title = %d, want 400", code)
 	}
-	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"x","severity":"critical"}`); code != 400 {
+	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"x","severity":"urgent"}`); code != 400 {
 		t.Errorf("create with bad severity = %d, want 400", code)
 	}
 
@@ -241,6 +241,10 @@ func TestIncidentLifecycle(t *testing.T) {
 	}
 	if code, _, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2000))); code != 201 {
 		t.Errorf("2000-char update = %d, want 201", code)
+	}
+	// critical round-trips end to end instead of downgrading to minor.
+	if code, body, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"Outage","severity":"critical"}`); code != 201 || body["severity"] != "critical" {
+		t.Errorf("create critical = %d %v, want 201/critical", code, body)
 	}
 }
 
