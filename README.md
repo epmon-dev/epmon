@@ -193,6 +193,24 @@ service at one probe/minute over 90 days.
 - **Data:** back up the SQLite file — hot copies while running are safe —
   or mount the volume into your backup job.
 
+## Metrics (`/metrics`, Prometheus text format)
+
+Scrape it like any Prometheus target. Per-service series carry a
+`service="<id>"` label; names and labels are compatibility surface and
+won't be renamed.
+
+| Metric | Kind | Use it for |
+|---|---|---|
+| `epmon_service_up` | gauge | Alerting: `epmon_service_up == 0` pages. State, not last probe. |
+| `epmon_probe_total{result="success"\|"failure"}` | counter | Raw outcome rates; burn-rate alerts. |
+| `epmon_probe_duration_seconds` | histogram | Latency: `histogram_quantile(0.99, sum(rate(epmon_probe_duration_seconds_bucket[5m])) by (service, le))` for p99 degradation and slow drift. Buckets: 5ms…10s. |
+| `epmon_probe_skipped_total` | counter | Overlap-guard skips (scheduler shed load). |
+| `epmon_store_queue_depth`, `epmon_store_cmd_queue_depth` | gauges | Internal backpressure; sustained non-zero deserves a look. |
+| `epmon_store_dropped_total`, `epmon_store_write_timeout_total` | counters | Lost or aborted writes — alert on increase. |
+| `epmon_service_history_migrated_total{result="ok"\|"no_match"}` | counter | Alias-migration outcomes after reloads. |
+| `epmon_config_reload_total{result="ok"\|"error"}` | counter | Config reload outcomes. |
+| `epmon_uptime_seconds`, `epmon_build_info` | gauge | Process age and build identity. |
+
 ## Development
 
 ```
