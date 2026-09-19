@@ -128,6 +128,11 @@ A probe is **up** when it answers within `timeout` with a status in
 `body_contains`. Anything else stores `up: false` with a short error
 (`transport: …`, `status: got 500`, `body: …`).
 
+Config location, in order: `--config <path>`, `EPMON_CONFIG`,
+`./epmon.yaml`, `/etc/epmon/epmon.yaml`, then `config.yaml`.
+Exit codes: `0` ok, `1` config error, `2` storage error, `3` listen/bind
+error, `4` failed `healthcheck`, `64` usage error.
+
 ## API (`/api/v1`)
 
 Full contract with schemas: `/docs`, or raw at `/api/v1/openapi.yaml`.
