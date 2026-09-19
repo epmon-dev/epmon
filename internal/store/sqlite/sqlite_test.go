@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,56 @@ func TestIncidents(t *testing.T) {
 	byOther, err := st.ListIncidents(ctx, store.IncidentFilter{ServiceID: "other"})
 	if err != nil || len(byOther) != 0 {
 		t.Errorf("filter by other service = %d, %v", len(byOther), err)
+	}
+}
+
+// TestUpdateIncidentConcurrentFields patches different fields from two
+// goroutines: with a read-modify-write implementation the loser's full-row
+// rewrite intermittently clobbers the winner's field.
+func TestUpdateIncidentConcurrentFields(t *testing.T) {
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	for i := 0; i < 50; i++ {
+		id, err := st.CreateIncident(ctx, "web", "Race", "minor", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = st.UpdateIncident(ctx, id, "T", "", "", now)
+		}()
+		go func() {
+			defer wg.Done()
+			_ = st.UpdateIncident(ctx, id, "", "", "monitoring", now)
+		}()
+		wg.Wait()
+		got, err := st.GetIncident(ctx, id)
+		if err != nil || got == nil {
+			t.Fatalf("iteration %d: GetIncident = %+v, %v", i, got, err)
+		}
+		if got.Title != "T" || got.State != "monitoring" {
+			t.Fatalf("iteration %d: lost update, got title=%q state=%q", i, got.Title, got.State)
+		}
+	}
+}
+
+// TestUpdateIncidentNoopUpdate asserts a same-value patch still matches
+// the row (no ErrNotFound) since SQLite counts matched rows.
+func TestUpdateIncidentNoopUpdate(t *testing.T) {
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	id, err := st.CreateIncident(ctx, "web", "Noop", "minor", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateIncident(ctx, id, "", "", "investigating", now); err != nil {
+		t.Errorf("same-value update = %v, want nil", err)
 	}
 }
 
