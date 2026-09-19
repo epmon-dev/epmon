@@ -1,8 +1,10 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -175,5 +177,38 @@ func TestHealthzReadiness(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("dead store = %d, want 503", rec.Code)
+	}
+}
+
+// TestLogRecordsOutcome asserts the access log carries the response status
+// on both success and failure paths (a closed store forces the 500).
+func TestLogRecordsOutcome(t *testing.T) {
+	srv, st := testServer(t)
+	h := Log(srv.Handler())
+
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/status", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/status", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("dead store status = %d, want 500", rec.Code)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "GET /api/v1/status 200 ") {
+		t.Errorf("log missing 200 line, got %q", out)
+	}
+	if !strings.Contains(out, "GET /api/v1/status 500 ") {
+		t.Errorf("log missing 500 line, got %q", out)
 	}
 }
