@@ -13,6 +13,12 @@ jobs:
           go-version: "1.25"
           cache: true
       - run: gofmt -l .
+      - name: build context stays small
+        run: |
+          test -f .dockerignore
+          for entry in '^\.git/' '^data/' '^\*\.db$' '^config\.yaml$'; do
+            grep -Eq "$entry" .dockerignore || { echo "missing $entry in .dockerignore"; exit 1; }
+          done
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race ./...
