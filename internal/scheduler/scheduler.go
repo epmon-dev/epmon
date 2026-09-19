@@ -6,6 +6,7 @@ package scheduler
 import (
 	"context"
 	"log"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -23,11 +24,23 @@ type Scheduler struct {
 	checks  store.CheckRecorder
 	observe metrics.Observer
 	wg      sync.WaitGroup
+	// phase spreads first ticks across the interval (see loop). Tests
+	// override it for deterministic timing; production uses randomPhase.
+	phase func(time.Duration) time.Duration
 }
 
 // New wires a scheduler. Call Run to start, Stop to shut down.
 func New(cfg *config.Config, checks store.CheckRecorder, observe metrics.Observer) *Scheduler {
-	return &Scheduler{cfg: cfg, checks: checks, observe: observe}
+	return &Scheduler{cfg: cfg, checks: checks, observe: observe, phase: randomPhase}
+}
+
+// randomPhase draws a start offset in [0, interval) so services sharing a
+// period don't probe in lockstep for the life of the process.
+func randomPhase(interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(interval)))
 }
 
 // Run starts one loop per enabled service plus the daily purge. It returns immediately.
@@ -74,8 +87,18 @@ func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
 		logger.report(svc.ID, stateUp, check.Error)
 	}
 	probe()
+	// Stagger the first tick: an immediate probe per service plus aligned
+	// tickers would fire the whole fleet in lockstep every interval.
+	// The phase only offsets alignment; the steady period is unchanged.
+	phaseTimer := time.NewTimer(s.phase(svc.Interval.Std()))
+	defer phaseTimer.Stop()
 	ticker := time.NewTicker(svc.Interval.Std())
 	defer ticker.Stop()
+	select {
+	case <-ctx.Done():
+		return
+	case <-phaseTimer.C:
+	}
 	for {
 		select {
 		case <-ctx.Done():
