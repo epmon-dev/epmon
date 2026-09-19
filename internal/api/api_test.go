@@ -183,7 +183,7 @@ func TestIncidentLifecycle(t *testing.T) {
 	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"severity":"major"}`); code != 400 {
 		t.Errorf("create without title = %d, want 400", code)
 	}
-	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"x","severity":"critical"}`); code != 400 {
+	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"x","severity":"urgent"}`); code != 400 {
 		t.Errorf("create with bad severity = %d, want 400", code)
 	}
 
@@ -195,6 +195,13 @@ func TestIncidentLifecycle(t *testing.T) {
 	}
 	if code, _, _ := do(t, h, "PATCH", path, `{"state":"resolved"}`); code != 200 {
 		t.Errorf("resolve = %d", code)
+	}
+	// resolved is terminal: moving back out is a 409 naming the pair.
+	if code, body, _ := do(t, h, "PATCH", path, `{"state":"investigating"}`); code != 409 ||
+		body["error"].(map[string]any)["code"] != "conflict" {
+		t.Errorf("resolved->investigating = %d %v, want 409/conflict", code, body)
+	} else if msg := body["error"].(map[string]any)["message"].(string); !strings.Contains(msg, `"resolved"`) || !strings.Contains(msg, `"investigating"`) {
+		t.Errorf("conflict message = %q, want from→to pair named", msg)
 	}
 	if code, _, _ := do(t, h, "PATCH", path, `{}`); code != 400 {
 		t.Errorf("empty patch = %d, want 400", code)
@@ -228,6 +235,53 @@ func TestIncidentLifecycle(t *testing.T) {
 	code, body, _ = do(t, h, "GET", "/api/v1/incidents?service=other", "")
 	if code != 200 || body["total"] != float64(0) {
 		t.Errorf("filter service=other = %d %v", code, body)
+	}
+	code, body, _ = do(t, h, "GET", "/api/v1/incidents?state=bogus", "")
+	if code != 400 || body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Errorf("filter state=bogus = %d %v, want 400/bad_request", code, body)
+	}
+
+	// Update text is bounded to 1..2000 characters (runes), enforced in
+	// the store and surfaced as 400 here.
+	if code, body, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2001))); code != 400 || body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Errorf("oversize update = %d %v, want 400/bad_request", code, body)
+	}
+	if code, _, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2000))); code != 201 {
+		t.Errorf("2000-char update = %d, want 201", code)
+	}
+	// critical round-trips end to end instead of downgrading to minor.
+	if code, body, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"Outage","severity":"critical"}`); code != 201 || body["severity"] != "critical" {
+		t.Errorf("create critical = %d %v, want 201/critical", code, body)
+	}
+}
+
+func TestRemovedServiceHistory(t *testing.T) {
+	// Archive-on-remove: checks recorded for an id that is no longer in
+	// the catalogue stay readable in history, vanish from status, and
+	// never-seen ids still 404.
+	srv, st := testServer(t)
+	h := srv.Handler()
+	ctx := t.Context()
+
+	ts := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC).Unix()
+	if err := st.RecordCheck(ctx, store.Check{ServiceID: "ghost", TS: ts, Up: true, LatencyMs: 5, StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, body, _ := do(t, h, "GET", "/api/v1/services/ghost/history", ""); code != 200 || body["service_id"] != "ghost" {
+		t.Errorf("removed history = %d %v, want 200 for ghost", code, body)
+	}
+	if code, body, _ := do(t, h, "GET", "/api/v1/status", ""); code != 200 {
+		t.Fatalf("status = %d", code)
+	} else {
+		for _, svc := range body["services"].([]any) {
+			if svc.(map[string]any)["id"] == "ghost" {
+				t.Errorf("removed id still listed in status: %v", body)
+			}
+		}
+	}
+	if code, _, _ := do(t, h, "GET", "/api/v1/services/never-existed/history", ""); code != 404 {
+		t.Errorf("unknown history = %d, want 404", code)
 	}
 }
 

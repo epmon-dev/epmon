@@ -161,8 +161,11 @@ func (s *Server) serveDocs(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	// Readiness, not just liveness: orchestration must stop routing here
-	// when the database is gone.
-	if err := s.store.Ping(r.Context()); err != nil {
+	// when the database is gone. The Ping gets its own short budget so a
+	// wedged store turns into a fast 503 instead of a hanging probe.
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := s.store.Ping(ctx); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "unavailable", "store unreachable")
 		return
 	}
@@ -266,8 +269,18 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !known {
-		writeErr(w, http.StatusNotFound, "not_found", "unknown service")
-		return
+		// Archive-on-remove (§4.4): a service deleted from the catalogue
+		// stops appearing in status, but its recorded history stays
+		// readable. Truly unknown ids (no checks ever) still 404.
+		last, err := s.store.LastCheck(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", "store read failed")
+			return
+		}
+		if last == nil {
+			writeErr(w, http.StatusNotFound, "not_found", "unknown service")
+			return
+		}
 	}
 	q := r.URL.Query()
 	days, ok := intParam(q.Get("days"), 1, 365, 90)
@@ -329,6 +342,16 @@ func intParam(raw string, min, max, def int) (v int, ok bool) {
 
 func (s *Server) listIncidents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// state is a closed enum (see openapi.yaml); reject typos loudly
+	// instead of answering an empty list. service stays lenient: service
+	// ids are an open namespace (renamed/future services, platform-wide
+	// incidents), so unknown values legitimately match nothing.
+	switch q.Get("state") {
+	case "", "investigating", "monitoring", "resolved":
+	default:
+		writeErr(w, http.StatusBadRequest, "bad_request", "state must be investigating|monitoring|resolved")
+		return
+	}
 	maxPage := s.cfg.API.MaxPageSize
 	if maxPage <= 0 {
 		maxPage = 100
@@ -390,8 +413,8 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "title is required")
 		return
 	}
-	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major")
+	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" && body.Severity != "critical" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major|critical")
 		return
 	}
 	id, err := s.store.CreateIncident(r.Context(), body.ServiceID, body.Title, body.Severity, s.now())
@@ -450,8 +473,8 @@ func (s *Server) updateIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "empty patch: set title, severity or state")
 		return
 	}
-	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major")
+	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" && body.Severity != "critical" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major|critical")
 		return
 	}
 	switch body.State {
@@ -463,6 +486,11 @@ func (s *Server) updateIncident(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.UpdateIncident(r.Context(), id, body.Title, body.Severity, body.State, s.now()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "not_found", "unknown incident")
+			return
+		}
+		var terr *store.TransitionError
+		if errors.As(err, &terr) {
+			writeErr(w, http.StatusConflict, "conflict", terr.Error())
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "internal", "store write failed")
@@ -498,6 +526,10 @@ func (s *Server) addUpdate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "not_found", "unknown incident")
 			return
 		}
+		if errors.Is(err, store.ErrInvalid) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "text must be 1..2000 characters")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "internal", "store write failed")
 		return
 	}
@@ -510,10 +542,25 @@ func (s *Server) addUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, incident)
 }
 
-// Log decorates h with one request line. Kept tiny on purpose.
+// statusRecorder captures the response code for request logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// Log decorates h with one outcome line per request: method, path, status
+// and latency. Handler error responses are visible here, so a 500 leaves
+// a trace server-side instead of only reaching the client.
 func Log(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.ServeHTTP(w, r)
-		log.Printf("epmon: %s %s", r.Method, r.URL.Path)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		h.ServeHTTP(rec, r)
+		log.Printf("epmon: %s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
 	})
 }
