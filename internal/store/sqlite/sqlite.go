@@ -304,6 +304,40 @@ func (s *Store) GetIncident(ctx context.Context, id int64) (*store.Incident, err
 
 // ListIncidents returns newest-first incidents matching the filter.
 func (s *Store) ListIncidents(ctx context.Context, f store.IncidentFilter) ([]store.Incident, error) {
+	conds, args := incidentConds(f)
+	filter := `ORDER BY i.created_at DESC, i.id DESC`
+	if len(conds) > 0 {
+		filter = "WHERE " + strings.Join(conds, " AND ") + " " + filter
+	}
+	if f.Limit > 0 {
+		filter += " LIMIT ?"
+		args = append(args, f.Limit)
+	}
+	if f.Offset > 0 {
+		if f.Limit <= 0 {
+			filter += " LIMIT -1"
+		}
+		filter += " OFFSET ?"
+		args = append(args, f.Offset)
+	}
+	return s.listIncidents(ctx, filter, args...)
+}
+
+// CountIncidents returns the total matches for the filter, ignoring paging.
+func (s *Store) CountIncidents(ctx context.Context, f store.IncidentFilter) (int, error) {
+	conds, args := incidentConds(f)
+	q := `SELECT COUNT(*) FROM incidents i`
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func incidentConds(f store.IncidentFilter) ([]string, []any) {
 	conds := []string{}
 	args := []any{}
 	if f.State != "" {
@@ -314,11 +348,7 @@ func (s *Store) ListIncidents(ctx context.Context, f store.IncidentFilter) ([]st
 		conds = append(conds, "i.service_id=?")
 		args = append(args, f.ServiceID)
 	}
-	filter := `ORDER BY i.created_at DESC, i.id DESC`
-	if len(conds) > 0 {
-		filter = "WHERE " + strings.Join(conds, " AND ") + " " + filter
-	}
-	return s.listIncidents(ctx, filter, args...)
+	return conds, args
 }
 
 func (s *Store) listIncidents(ctx context.Context, filter string, args ...any) ([]store.Incident, error) {
@@ -343,31 +373,50 @@ func (s *Store) listIncidents(ctx context.Context, filter string, args ...any) (
 		return nil, err
 	}
 	for i := range out {
-		updates, err := s.incidentUpdates(ctx, out[i].ID)
+		out[i].Updates = []store.Update{}
+	}
+	if len(out) > 0 {
+		threads, err := s.incidentThreads(ctx, out)
 		if err != nil {
 			return nil, err
 		}
-		out[i].Updates = updates
+		for i := range out {
+			if th, ok := threads[out[i].ID]; ok {
+				out[i].Updates = th
+			}
+		}
 	}
 	return out, nil
 }
 
-func (s *Store) incidentUpdates(ctx context.Context, incidentID int64) ([]store.Update, error) {
+// incidentThreads loads update threads for a page of incidents in one
+// query instead of one query per incident.
+func (s *Store) incidentThreads(ctx context.Context, incidents []store.Incident) (map[int64][]store.Update, error) {
+	ids := make([]any, 0, len(incidents))
+	for _, in := range incidents {
+		ids = append(ids, in.ID)
+	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT ts, text FROM incident_updates WHERE incident_id=? ORDER BY ts ASC, id ASC`,
-		incidentID,
+		`SELECT incident_id, ts, text FROM incident_updates WHERE incident_id IN (`+placeholders(len(ids))+`)
+		 ORDER BY incident_id ASC, ts ASC, id ASC`,
+		ids...,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	updates := []store.Update{}
+	out := map[int64][]store.Update{}
 	for rows.Next() {
+		var incidentID int64
 		var u store.Update
-		if err := rows.Scan(&u.TS, &u.Text); err != nil {
+		if err := rows.Scan(&incidentID, &u.TS, &u.Text); err != nil {
 			return nil, err
 		}
-		updates = append(updates, u)
+		out[incidentID] = append(out[incidentID], u)
 	}
-	return updates, rows.Err()
+	return out, rows.Err()
+}
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }

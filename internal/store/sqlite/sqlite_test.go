@@ -141,6 +141,46 @@ func TestIncidents(t *testing.T) {
 	}
 }
 
+func TestListIncidentsPaging(t *testing.T) {
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Now().UTC()
+
+	for _, title := range []string{"T1", "T2", "T3", "T4", "T5"} {
+		id, err := st.CreateIncident(ctx, "web", title, "minor", now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if title == "T5" {
+			if err := st.AddIncidentUpdate(ctx, id, "note", now); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if n, err := st.CountIncidents(ctx, store.IncidentFilter{}); err != nil || n != 5 {
+		t.Fatalf("CountIncidents = %d, %v; want 5", n, err)
+	}
+	page, err := st.ListIncidents(ctx, store.IncidentFilter{Limit: 2, Offset: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page) != 2 || page[0].Title != "T4" || page[1].Title != "T3" {
+		t.Fatalf("page = %+v, want [T4 T3] newest-first", page)
+	}
+	first, err := st.ListIncidents(ctx, store.IncidentFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 2 || first[0].Title != "T5" || len(first[0].Updates) != 1 {
+		t.Fatalf("first page = %+v, want T5 with its thread", first)
+	}
+	// Unbounded direct-store use keeps working.
+	all, err := st.ListIncidents(ctx, store.IncidentFilter{})
+	if err != nil || len(all) != 5 {
+		t.Fatalf("unbounded list = %d, %v; want 5", len(all), err)
+	}
+}
+
 func TestSyncServices(t *testing.T) {
 	st := openTest(t)
 	ctx := t.Context()

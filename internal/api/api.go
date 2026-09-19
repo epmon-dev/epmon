@@ -24,6 +24,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -328,17 +329,50 @@ func intParam(raw string, min, max, def int) (v int, ok bool) {
 
 func (s *Server) listIncidents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	incidents, err := s.store.ListIncidents(r.Context(), store.IncidentFilter{
+	maxPage := s.cfg.API.MaxPageSize
+	if maxPage <= 0 {
+		maxPage = 100
+	}
+	defPage := 100
+	if defPage > maxPage {
+		defPage = maxPage
+	}
+	limit, ok := intParam(q.Get("limit"), 1, maxPage, defPage)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("limit must be 1..%d", maxPage))
+		return
+	}
+	offset := 0
+	if raw := q.Get("offset"); raw != "" {
+		var err error
+		offset, err = strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			writeErr(w, http.StatusBadRequest, "bad_request", "offset must be a non-negative integer")
+			return
+		}
+	}
+	filter := store.IncidentFilter{
 		State:     q.Get("state"),
 		ServiceID: q.Get("service"),
+	}
+	incidents, err := s.store.ListIncidents(r.Context(), store.IncidentFilter{
+		State:     filter.State,
+		ServiceID: filter.ServiceID,
+		Limit:     limit,
+		Offset:    offset,
 	})
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal", "store read failed")
+		return
+	}
+	total, err := s.store.CountIncidents(r.Context(), filter)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "store read failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"incidents": incidents,
-		"total":     len(incidents),
+		"total":     total,
 	})
 }
 
