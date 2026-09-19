@@ -114,6 +114,47 @@ services:
 	}
 }
 
+func TestRemovedKnobsRejected(t *testing.T) {
+	// storage.path / storage.retention.* / api.rate_limit were validated
+	// but never read; they are gone, and the strict loader must say so
+	// loudly instead of accepting dead settings.
+	for name, body := range map[string]string{
+		"storage.path":      "storage: {path: other.db}\nservices:\n  - {id: a, url: https://example.com}",
+		"storage.retention": "storage: {retention: {checks_days: 7}}\nservices:\n  - {id: a, url: https://example.com}",
+		"api.rate_limit":    "api: {rate_limit: {requests_per_minute: 10}}\nservices:\n  - {id: a, url: https://example.com}",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := writeTemp(t, "config.yaml", body)
+			if _, err := Load(path); err == nil {
+				t.Errorf("expected unknown-field error for removed %s", name)
+			}
+		})
+	}
+}
+
+func TestResolvedAndReservedKnobs(t *testing.T) {
+	// probes.max_body_bytes resolves onto every service; reserved knobs
+	// (logging, auto_*, status_page, metrics auth) still load fine while
+	// warning on stderr instead of silently doing nothing.
+	path := writeTemp(t, "config.yaml", `
+probes:
+  max_body_bytes: 1024
+logging:
+  level: debug
+server:
+  status_page: {enabled: false}
+services:
+  - {id: a, url: https://example.com}
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Services[0].MaxBodyBytes != 1024 {
+		t.Errorf("service MaxBodyBytes = %d, want 1024 from probes.max_body_bytes", cfg.Services[0].MaxBodyBytes)
+	}
+}
+
 func TestServerValidation(t *testing.T) {
 	cases := map[string]string{
 		"tls half-set":    "server: {tls_cert: /c.pem}\nservices:\n  - {id: a, url: https://example.com}",

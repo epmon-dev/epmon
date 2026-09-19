@@ -10,6 +10,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,6 +71,21 @@ const dayDownRatio = 0.1
 // Store is a SQLite-backed store.Store.
 type Store struct {
 	db *sql.DB
+}
+
+// WithBusyTimeout returns dsn with a busy_timeout pragma applied, so
+// concurrent writers wait up to ms milliseconds on locked pages instead
+// of failing fast with "database is locked". An explicit busy_timeout
+// already present in dsn is left untouched.
+func WithBusyTimeout(dsn string, ms int) string {
+	if strings.Contains(dsn, "busy_timeout") {
+		return dsn
+	}
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	return dsn + sep + "_pragma=busy_timeout(" + strconv.Itoa(ms) + ")"
 }
 
 // Open creates the file if needed and applies the schema.

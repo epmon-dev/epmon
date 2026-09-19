@@ -22,10 +22,7 @@ import (
 	"github.com/epmon-dev/epmon/internal/metrics"
 	"github.com/epmon-dev/epmon/internal/scheduler"
 	"github.com/epmon-dev/epmon/internal/store"
-	// Side-effect import: registers the "sqlite" driver with the store
-	// registry. main never names the adapter type — cfg.Database.Driver
-	// picks it. Same pattern as database/sql drivers.
-	_ "github.com/epmon-dev/epmon/internal/store/sqlite"
+	"github.com/epmon-dev/epmon/internal/store/sqlite"
 )
 
 const (
@@ -68,7 +65,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		log.Fatalf("epmon: %v", err)
 	}
 
-	st, err := store.Open(context.Background(), cfg.Database.Driver, cfg.Database.DSN)
+	st, err := store.Open(context.Background(), cfg.Database.Driver, sqliteDSN(cfg))
 	if err != nil {
 		log.Fatalf("epmon: %v", err)
 	}
@@ -103,13 +100,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	root.Handle("/metrics", registry.Handler())
 	root.Handle("/", api.New(cfg, st, nil).Handler())
 
-	srv := &http.Server{
-		Addr:         cfg.Server.Addr,
-		Handler:      api.Log(root),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	srv := newHTTPServer(cfg, api.Log(root))
 	go func() {
 		log.Printf("epmon: watching %d service(s), API on %s", len(cfg.Services), cfg.Server.Addr)
 		var err error
@@ -129,6 +120,29 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
 	return exitOK
+}
+
+// sqliteDSN carries the configured SQLite busy budget inside the DSN via
+// the adapter's documented pragma parameter. The store registry only
+// passes an opaque connection string, so driver-specific tuning travels
+// this way; other drivers receive the DSN untouched.
+func sqliteDSN(cfg *config.Config) string {
+	if cfg.Database.Driver == "sqlite" {
+		return sqlite.WithBusyTimeout(cfg.Database.DSN, cfg.Storage.BusyTimeoutMs)
+	}
+	return cfg.Database.DSN
+}
+
+// newHTTPServer builds the API server from the validated config timeouts.
+// IdleTimeout has no knob and stays at the 60s default.
+func newHTTPServer(cfg *config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:         cfg.Server.Addr,
+		Handler:      handler,
+		ReadTimeout:  cfg.Server.ReadTimeout.Std(),
+		WriteTimeout: cfg.Server.WriteTimeout.Std(),
+		IdleTimeout:  60 * time.Second,
+	}
 }
 
 // getConfigArg returns the value after --config in args, or the default.

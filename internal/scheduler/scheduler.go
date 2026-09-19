@@ -32,9 +32,16 @@ func New(cfg *config.Config, checks store.CheckRecorder, observe metrics.Observe
 
 // Run starts one loop per service plus the daily purge. It returns immediately.
 func (s *Scheduler) Run(ctx context.Context) {
+	n := s.cfg.Probes.Concurrency
+	if n <= 0 {
+		n = 64
+	}
+	// sem bounds concurrent probe executions across all loops so fleet
+	// size never sets the outbound concurrency by itself.
+	sem := make(chan struct{}, n)
 	for _, svc := range s.cfg.Services {
 		s.wg.Add(1)
-		go s.loop(ctx, svc)
+		go s.loop(ctx, svc, sem)
 	}
 	s.wg.Add(1)
 	go s.purgeLoop(ctx)
@@ -43,9 +50,15 @@ func (s *Scheduler) Run(ctx context.Context) {
 // Stop waits for every loop to exit.
 func (s *Scheduler) Stop() { s.wg.Wait() }
 
-func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
+func (s *Scheduler) loop(ctx context.Context, svc config.Service, sem chan struct{}) {
 	defer s.wg.Done()
 	probe := func() {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			return
+		}
 		check := prober.Probe(ctx, svc)
 		if err := s.checks.RecordCheck(ctx, check); err != nil {
 			log.Printf("epmon: record %s: %v", svc.ID, err)
