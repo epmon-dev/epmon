@@ -246,30 +246,29 @@ func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity s
 	return res.LastInsertId()
 }
 
-// UpdateIncident mutates title/severity/state; empty args keep the field.
+// UpdateIncident mutates title/severity/state in a single atomic UPDATE;
+// empty args keep the field. Unknown id → ErrNotFound (SQLite reports
+// matched rows, so zero means the id names nothing).
 func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error {
-	cur, err := s.GetIncident(ctx, id)
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE incidents SET
+			title = CASE WHEN ? <> '' THEN ? ELSE title END,
+			severity = CASE WHEN ? IN ('minor','major','critical') THEN ? ELSE severity END,
+			state = CASE WHEN ? IN ('investigating','monitoring','resolved') THEN ? ELSE state END,
+			updated_at = ? WHERE id = ?`,
+		title, title, severity, severity, state, state, now.Unix(), id,
+	)
 	if err != nil {
 		return err
 	}
-	if cur == nil {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
 		return store.ErrNotFound
 	}
-	if title != "" {
-		cur.Title = title
-	}
-	if severity == "minor" || severity == "major" || severity == "critical" {
-		cur.Severity = severity
-	}
-	switch state {
-	case "investigating", "monitoring", "resolved":
-		cur.State = state
-	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE incidents SET title=?, severity=?, state=?, updated_at=? WHERE id=?`,
-		cur.Title, cur.Severity, cur.State, now.Unix(), id,
-	)
-	return err
+	return nil
 }
 
 // AddIncidentUpdate appends one timestamped line to an incident's thread.
