@@ -101,17 +101,19 @@ func (s *Scheduler) loop(ctx context.Context, svc config.Service, sem chan struc
 	}
 	probe()
 	// Stagger the first tick: an immediate probe per service plus aligned
-	// tickers would fire the whole fleet in lockstep every interval.
-	// The phase only offsets alignment; the steady period is unchanged.
+	// tickers would fire the whole fleet in lockstep every interval. The
+	// ticker starts after the phase wait so ticks anchor to the phase end,
+	// spreading same-period services across the interval; the steady
+	// period itself is unchanged.
 	phaseTimer := time.NewTimer(s.phase(svc.Interval.Std()))
-	defer phaseTimer.Stop()
-	ticker := time.NewTicker(svc.Interval.Std())
-	defer ticker.Stop()
 	select {
 	case <-ctx.Done():
+		phaseTimer.Stop()
 		return
 	case <-phaseTimer.C:
 	}
+	ticker := time.NewTicker(svc.Interval.Std())
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
