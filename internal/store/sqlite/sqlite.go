@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/epmon-dev/epmon/internal/store"
 	_ "modernc.org/sqlite"
@@ -228,10 +229,10 @@ func (s *Store) Purge(ctx context.Context, retentionDays int, now time.Time) (in
 	return res.RowsAffected()
 }
 
-// CreateIncident opens a manual incident. Severity normalizes to minor
-// unless "major".
+// CreateIncident opens a manual incident. Empty severity normalizes to
+// minor; minor, major and critical round-trip verbatim.
 func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity string, now time.Time) (int64, error) {
-	if severity != "major" {
+	if severity != "major" && severity != "critical" {
 		severity = "minor"
 	}
 	res, err := s.db.ExecContext(ctx,
@@ -252,7 +253,7 @@ func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, s
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE incidents SET
 			title = CASE WHEN ? <> '' THEN ? ELSE title END,
-			severity = CASE WHEN ? IN ('minor','major') THEN ? ELSE severity END,
+			severity = CASE WHEN ? IN ('minor','major','critical') THEN ? ELSE severity END,
 			state = CASE WHEN ? IN ('investigating','monitoring','resolved') THEN ? ELSE state END,
 			updated_at = ? WHERE id = ?`,
 		title, title, severity, severity, state, state, now.Unix(), id,
@@ -272,6 +273,9 @@ func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, s
 
 // AddIncidentUpdate appends one timestamped line to an incident's thread.
 func (s *Store) AddIncidentUpdate(ctx context.Context, id int64, text string, now time.Time) error {
+	if n := utf8.RuneCountInString(text); n < 1 || n > store.MaxUpdateRunes {
+		return fmt.Errorf("%w: update text must be 1..%d characters", store.ErrInvalid, store.MaxUpdateRunes)
+	}
 	var exists int
 	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM incidents WHERE id=?`, id).Scan(&exists); err != nil {
 		if err == sql.ErrNoRows {

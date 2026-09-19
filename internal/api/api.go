@@ -328,6 +328,16 @@ func intParam(raw string, min, max, def int) (v int, ok bool) {
 
 func (s *Server) listIncidents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// state is a closed enum (see openapi.yaml); reject typos loudly
+	// instead of answering an empty list. service stays lenient: service
+	// ids are an open namespace (renamed/future services, platform-wide
+	// incidents), so unknown values legitimately match nothing.
+	switch q.Get("state") {
+	case "", "investigating", "monitoring", "resolved":
+	default:
+		writeErr(w, http.StatusBadRequest, "bad_request", "state must be investigating|monitoring|resolved")
+		return
+	}
 	incidents, err := s.store.ListIncidents(r.Context(), store.IncidentFilter{
 		State:     q.Get("state"),
 		ServiceID: q.Get("service"),
@@ -356,8 +366,8 @@ func (s *Server) createIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "title is required")
 		return
 	}
-	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major")
+	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" && body.Severity != "critical" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major|critical")
 		return
 	}
 	id, err := s.store.CreateIncident(r.Context(), body.ServiceID, body.Title, body.Severity, s.now())
@@ -416,8 +426,8 @@ func (s *Server) updateIncident(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "empty patch: set title, severity or state")
 		return
 	}
-	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" {
-		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major")
+	if body.Severity != "" && body.Severity != "minor" && body.Severity != "major" && body.Severity != "critical" {
+		writeErr(w, http.StatusBadRequest, "bad_request", "severity must be minor|major|critical")
 		return
 	}
 	switch body.State {
@@ -462,6 +472,10 @@ func (s *Server) addUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.AddIncidentUpdate(r.Context(), id, body.Text, s.now()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "not_found", "unknown incident")
+			return
+		}
+		if errors.Is(err, store.ErrInvalid) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "text must be 1..2000 characters")
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "internal", "store write failed")

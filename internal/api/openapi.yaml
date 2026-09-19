@@ -249,6 +249,9 @@ paths:
               properties:
                 text:
                   type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: Counted in characters; longer texts are rejected with 400.
       responses:
         '201':
           description: Updated incident. Location header points at it.
@@ -495,7 +498,7 @@ components:
           type: string
         severity:
           type: string
-          enum: [minor, major]
+          enum: [minor, major, critical]
         state:
           type: string
           enum: [investigating, monitoring, resolved]
@@ -517,7 +520,7 @@ components:
           type: string
         severity:
           type: string
-          enum: [minor, major]
+          enum: [minor, major, critical]
           default: minor
     IncidentPatch:
       type: object
@@ -527,7 +530,7 @@ components:
           type: string
         severity:
           type: string
-          enum: [minor, major]
+          enum: [minor, major, critical]
         state:
           type: string
           enum: [investigating, monitoring, resolved]
