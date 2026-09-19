@@ -9,11 +9,31 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 )
 
 // ErrNotFound is returned when an incident id names nothing.
 var ErrNotFound = errors.New("store: not found")
+
+// TransitionError reports a rejected backward incident state move,
+// carrying the from→to pair for 409 responses.
+type TransitionError struct {
+	From string
+	To   string
+}
+
+// Error implements error.
+func (e *TransitionError) Error() string {
+	return "invalid state transition from " + strconv.Quote(e.From) + " to " + strconv.Quote(e.To)
+}
+
+// ErrInvalid is returned when input fails domain validation
+// (e.g. over-long incident update text).
+var ErrInvalid = errors.New("store: invalid")
+
+// MaxUpdateRunes bounds incident update text to 1..2000 runes.
+const MaxUpdateRunes = 2000
 
 // Check is one recorded probe result.
 type Check struct {

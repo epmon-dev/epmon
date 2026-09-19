@@ -224,6 +224,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '413':
           $ref: '#/components/responses/TooLarge'
         '429':
@@ -249,6 +251,9 @@ paths:
               properties:
                 text:
                   type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: Counted in characters; longer texts are rejected with 400.
       responses:
         '201':
           description: Updated incident. Location header points at it.
@@ -353,6 +358,12 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Backward incident state transition (states move forward only).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Unavailable:
       description: The database is unreachable.
       content:
@@ -376,7 +387,7 @@ components:
           properties:
             code:
               type: string
-              enum: [bad_request, unauthorized, too_large, rate_limited, not_found, internal, unavailable]
+              enum: [bad_request, unauthorized, too_large, rate_limited, not_found, conflict, internal, unavailable]
             message:
               type: string
     ServiceState:
@@ -495,7 +506,7 @@ components:
           type: string
         severity:
           type: string
-          enum: [minor, major]
+          enum: [minor, major, critical]
         state:
           type: string
           enum: [investigating, monitoring, resolved]
@@ -517,7 +528,7 @@ components:
           type: string
         severity:
           type: string
-          enum: [minor, major]
+          enum: [minor, major, critical]
           default: minor
     IncidentPatch:
       type: object
@@ -527,7 +538,7 @@ components:
           type: string
         severity:
           type: string
-          enum: [minor, major]
+          enum: [minor, major, critical]
         state:
           type: string
           enum: [investigating, monitoring, resolved]

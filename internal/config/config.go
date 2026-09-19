@@ -804,6 +804,9 @@ func (c *Config) Validate() error {
 		default:
 			return fmt.Errorf("service %q: method must be GET|HEAD|POST", s.ID)
 		}
+		if len(s.ExpectStatus.Codes) == 0 {
+			return fmt.Errorf("service %q: expect_status must list at least one status", s.ID)
+		}
 		if iv := s.Interval.Std(); iv < 5*time.Second || iv > 24*time.Hour {
 			return fmt.Errorf("service %q: interval must be 5s..24h", s.ID)
 		}

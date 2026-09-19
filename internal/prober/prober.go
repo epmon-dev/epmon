@@ -47,6 +47,8 @@ func clientFor(svc config.Service) *http.Client {
 	// a client safely.
 	client := &http.Client{Transport: transport}
 	if !svc.FollowRedirectsOrDefault() {
+		// Surface the redirect response itself (status + headers) instead
+		// of the landing page, so expect_status asserts the configured URL.
 		client.CheckRedirect = func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
