@@ -433,6 +433,30 @@ func TestDailyHistoryTimezone(t *testing.T) {
 	}
 }
 
+func TestWithBusyTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		dsn, want string
+	}{
+		{"epmon.db", "epmon.db?_pragma=busy_timeout(5000)"},
+		{"file:data.db?mode=ro", "file:data.db?mode=ro&_pragma=busy_timeout(5000)"},
+		{"epmon.db?_pragma=busy_timeout(100)", "epmon.db?_pragma=busy_timeout(100)"},
+	} {
+		if got := WithBusyTimeout(tc.dsn, 5000); got != tc.want {
+			t.Errorf("WithBusyTimeout(%q) = %q, want %q", tc.dsn, got, tc.want)
+		}
+	}
+	// The pragma DSN actually applies: open through it and read back.
+	st, err := Open(WithBusyTimeout(filepath.Join(t.TempDir(), "pragma.db"), 5000))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var v int
+	if err := st.db.QueryRow("PRAGMA busy_timeout").Scan(&v); err != nil || v != 5000 {
+		t.Errorf("busy_timeout = %d, %v; want 5000", v, err)
+	}
+}
+
 func TestSyncServices(t *testing.T) {
 	st := openTest(t)
 	ctx := t.Context()

@@ -275,6 +275,10 @@ type Service struct {
 	FailureThreshold   int               `yaml:"failure_threshold" json:"failure_threshold"`
 	Enabled            *bool             `yaml:"enabled" json:"enabled"`
 	Aliases            []string          `yaml:"aliases" json:"aliases"`
+	// MaxBodyBytes caps body_contains inspection for this service. It is
+	// resolved from probes.max_body_bytes at load and hidden from file
+	// formats (yaml/json "-") so the fleet knob stays the only source.
+	MaxBodyBytes int64 `yaml:"-" json:"-"`
 }
 
 // TLSSkipVerify is the legacy alias for InsecureSkipVerify.
@@ -338,18 +342,10 @@ type CORSConfig struct {
 	AllowedOrigins []string `yaml:"allowed_origins" json:"allowed_origins"`
 }
 
-// RetentionConfig holds day-window retention.
-type RetentionConfig struct {
-	ChecksDays  int `yaml:"checks_days" json:"checks_days"`
-	RollupsDays int `yaml:"rollups_days" json:"rollups_days"`
-}
-
-// Storage selects the database file and write budgets.
+// Storage tunes the bundled database adapter. database.dsn selects the
+// file; only the adapter-relevant budgets live here.
 type Storage struct {
-	Path          string          `yaml:"path" json:"path"`
-	BusyTimeoutMs int             `yaml:"busy_timeout_ms" json:"busy_timeout_ms"`
-	WriteTimeout  Duration        `yaml:"write_timeout" json:"write_timeout"`
-	Retention     RetentionConfig `yaml:"retention" json:"retention"`
+	BusyTimeoutMs int `yaml:"busy_timeout_ms" json:"busy_timeout_ms"`
 }
 
 // History controls day-bucket timezone.
@@ -357,16 +353,11 @@ type History struct {
 	Timezone string `yaml:"timezone" json:"timezone"`
 }
 
-// RateLimitConfig bounds write throughput.
-type RateLimitConfig struct {
-	RequestsPerMinute int `yaml:"requests_per_minute" json:"requests_per_minute"`
-}
-
-// API controls auth and pagination.
+// API controls auth and pagination. Rate limiting lives under server
+// (server.rate_limit_rpm/burst); there is no api.rate_limit key.
 type API struct {
-	AuthTokens  []string        `yaml:"auth_tokens" json:"auth_tokens"`
-	RateLimit   RateLimitConfig `yaml:"rate_limit" json:"rate_limit"`
-	MaxPageSize int             `yaml:"max_page_size" json:"max_page_size"`
+	AuthTokens  []string `yaml:"auth_tokens" json:"auth_tokens"`
+	MaxPageSize int      `yaml:"max_page_size" json:"max_page_size"`
 }
 
 // Probes holds fleet-wide probe defaults.
@@ -468,13 +459,8 @@ func Default() *Config {
 	cfg.Server.ReadTimeout = Duration(10 * time.Second)
 	cfg.Server.WriteTimeout = Duration(10 * time.Second)
 	cfg.Server.StatusPage.Enabled = &t
-	cfg.Storage.Path = "./epmon.db"
 	cfg.Storage.BusyTimeoutMs = 5000
-	cfg.Storage.WriteTimeout = Duration(5 * time.Second)
-	cfg.Storage.Retention.ChecksDays = 90
-	cfg.Storage.Retention.RollupsDays = 730
 	cfg.History.Timezone = "UTC"
-	cfg.API.RateLimit.RequestsPerMinute = 120
 	cfg.API.MaxPageSize = 100
 	cfg.Probes.DefaultInterval = Duration(60 * time.Second)
 	cfg.Probes.DefaultTimeout = Duration(10 * time.Second)
@@ -550,26 +536,11 @@ func (c *Config) applyDefaults() error {
 	if c.Server.StatusPage.Enabled == nil {
 		c.Server.StatusPage.Enabled = boolPtr(true)
 	}
-	if c.Storage.Path == "" {
-		c.Storage.Path = "./epmon.db"
-	}
 	if c.Storage.BusyTimeoutMs == 0 {
 		c.Storage.BusyTimeoutMs = 5000
 	}
-	if c.Storage.WriteTimeout.Std() == 0 {
-		c.Storage.WriteTimeout = Duration(5 * time.Second)
-	}
-	if c.Storage.Retention.ChecksDays == 0 {
-		c.Storage.Retention.ChecksDays = 90
-	}
-	if c.Storage.Retention.RollupsDays == 0 {
-		c.Storage.Retention.RollupsDays = 730
-	}
 	if c.History.Timezone == "" {
 		c.History.Timezone = "UTC"
-	}
-	if c.API.RateLimit.RequestsPerMinute == 0 {
-		c.API.RateLimit.RequestsPerMinute = 120
 	}
 	if c.API.MaxPageSize == 0 {
 		c.API.MaxPageSize = 100
@@ -666,6 +637,9 @@ func (c *Config) applyDefaults() error {
 		if s.FailureThreshold == 0 {
 			s.FailureThreshold = c.Probes.FailureThreshold
 		}
+		if s.MaxBodyBytes == 0 {
+			s.MaxBodyBytes = c.Probes.MaxBodyBytes
+		}
 		if s.Name == "" {
 			s.Name = s.ID
 		}
@@ -681,6 +655,25 @@ func (c *Config) applyDefaults() error {
 		if s.InsecureSkipVerify {
 			warnOnce("insecure-skip-verify:" + s.ID)
 		}
+	}
+	// Reserved knobs: validated but not yet honored by the runtime. Warn
+	// when explicitly set so operators don't silently tune dead settings.
+	// (applyDefaults already filled defaults above, so any non-default
+	// value here came from the file.)
+	if c.Logging.Level != "info" || c.Logging.Format != "json" {
+		warnOncef("unimplemented:logging", "logging.level/format have no effect yet (log output is fixed)")
+	}
+	if c.Probes.AutoIncidents != nil && !*c.Probes.AutoIncidents {
+		warnOncef("unimplemented:auto-incidents", "probes.auto_incidents=false has no effect yet (no automatic incidents exist)")
+	}
+	if c.Incidents.AutoResolve != nil && !*c.Incidents.AutoResolve {
+		warnOncef("unimplemented:auto-resolve", "incidents.auto_resolve=false has no effect yet")
+	}
+	if c.Server.StatusPage.Enabled != nil && !*c.Server.StatusPage.Enabled {
+		warnOncef("unimplemented:status-page", "server.status_page.enabled=false has no effect yet")
+	}
+	if c.Server.Metrics.RequireAuth {
+		warnOncef("unimplemented:metrics-auth", "server.metrics.require_auth=true has no effect yet (/metrics stays public)")
 	}
 	return nil
 }
@@ -728,23 +721,11 @@ func (c *Config) Validate() error {
 	if c.Storage.BusyTimeoutMs < 100 || c.Storage.BusyTimeoutMs > 60000 {
 		return fmt.Errorf("storage.busy_timeout_ms must be 100..60000")
 	}
-	if c.Storage.WriteTimeout.Std() < time.Second || c.Storage.WriteTimeout.Std() > 30*time.Second {
-		return fmt.Errorf("storage.write_timeout must be 1s..30s")
-	}
-	if c.Storage.Retention.ChecksDays < 1 {
-		return fmt.Errorf("storage.retention.checks_days must be >= 1")
-	}
-	if c.Storage.Retention.RollupsDays < c.Storage.Retention.ChecksDays {
-		return fmt.Errorf("storage.retention.rollups_days must be >= checks_days")
-	}
 	if _, err := time.LoadLocation(c.History.Timezone); err != nil {
 		return fmt.Errorf("history.timezone: unknown IANA name %q", c.History.Timezone)
 	}
 	if c.API.MaxPageSize < 10 || c.API.MaxPageSize > 1000 {
 		return fmt.Errorf("api.max_page_size must be 10..1000")
-	}
-	if c.API.RateLimit.RequestsPerMinute < 1 {
-		return fmt.Errorf("api.rate_limit.requests_per_minute must be >= 1")
 	}
 	if c.Database.RetentionDays < 1 {
 		return fmt.Errorf("database.retention_days must be >= 1")

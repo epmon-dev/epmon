@@ -15,8 +15,18 @@ import (
 	"github.com/epmon-dev/epmon/internal/store"
 )
 
-// maxBody is the cap for body_contains inspection (4 MiB).
+// maxBody is the backstop cap for body_contains inspection (4 MiB),
+// used only when the service carries no resolved probes.max_body_bytes
+// (e.g. programmatically built services that skipped config load).
 const maxBody = 4 << 20
+
+// bodyCap resolves the inspection cap for one service.
+func bodyCap(svc config.Service) int64 {
+	if svc.MaxBodyBytes > 0 {
+		return svc.MaxBodyBytes
+	}
+	return maxBody
+}
 
 // clientKey distinguishes the transport configurations probes need.
 // Redirect policy joins the key so follow_redirects=false (#4) keeps its
@@ -103,7 +113,7 @@ func Probe(ctx context.Context, svc config.Service) store.Check {
 		return check
 	}
 	if svc.BodyContains != "" {
-		body, err := io.ReadAll(io.LimitReader(res.Body, maxBody))
+		body, err := io.ReadAll(io.LimitReader(res.Body, bodyCap(svc)))
 		if err != nil {
 			check.Error = "body: " + shortErr(err)
 			return check

@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -136,6 +137,30 @@ func TestProbeReusesConnections(t *testing.T) {
 	}
 	if got := conns.Load(); got != 1 {
 		t.Errorf("two sequential probes used %d connections, want 1 (keep-alive reuse)", got)
+	}
+}
+
+// TestProbeBodyCap constructs a body whose needle sits past a 100-byte
+// cap: the capped read misses it (down) while the 4MiB backstop would
+// have matched (up), proving the service-resolved probes.max_body_bytes
+// governs inspection.
+func TestProbeBodyCap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(append([]byte(strings.Repeat("x", 200)), "needle"...))
+	}))
+	defer srv.Close()
+
+	s := svc(srv.URL)
+	s.BodyContains = "needle"
+	s.MaxBodyBytes = 100
+	if c := Probe(t.Context(), s); c.Up {
+		t.Errorf("capped probe should miss the needle: %+v", c)
+	}
+
+	uncapped := svc(srv.URL)
+	uncapped.BodyContains = "needle"
+	if c := Probe(t.Context(), uncapped); !c.Up {
+		t.Errorf("backstop probe should match the needle: %+v", c)
 	}
 }
 
