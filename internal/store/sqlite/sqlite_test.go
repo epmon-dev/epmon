@@ -287,6 +287,64 @@ func TestUpdateIncidentNoopUpdate(t *testing.T) {
 	}
 }
 
+// TestIncidentStateMachine table-tests the forward-only machine:
+// investigating -> monitoring -> resolved. Same-state and forward skips
+// are legal; every backward move is rejected with TransitionError.
+func TestIncidentStateMachine(t *testing.T) {
+	forward := []struct {
+		from, to string
+		wantErr  bool
+	}{
+		{"investigating", "investigating", false},
+		{"investigating", "monitoring", false},
+		{"investigating", "resolved", false}, // skip forward stays legal
+		{"monitoring", "monitoring", false},
+		{"monitoring", "resolved", false},
+		{"monitoring", "investigating", true},
+		{"resolved", "resolved", false},
+		{"resolved", "monitoring", true},
+		{"resolved", "investigating", true},
+	}
+	for _, tc := range forward {
+		t.Run(tc.from+"->"+tc.to, func(t *testing.T) {
+			st := openTest(t)
+			ctx := t.Context()
+			now := time.Now().UTC()
+
+			id, err := st.CreateIncident(ctx, "web", "State", "minor", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Walk legally to the `from` state first.
+			for _, s := range []string{"investigating", "monitoring", "resolved"} {
+				if err := st.UpdateIncident(ctx, id, "", "", s, now); err != nil {
+					t.Fatalf("setup move to %s: %v", s, err)
+				}
+				if s == tc.from {
+					break
+				}
+			}
+			err = st.UpdateIncident(ctx, id, "", "", tc.to, now)
+			if !tc.wantErr && err != nil {
+				t.Errorf("move %s->%s = %v, want nil", tc.from, tc.to, err)
+			}
+			var terr *store.TransitionError
+			if tc.wantErr {
+				if !errors.As(err, &terr) {
+					t.Errorf("move %s->%s = %v, want TransitionError", tc.from, tc.to, err)
+				} else if terr.From != tc.from || terr.To != tc.to {
+					t.Errorf("TransitionError = %+v, want from=%q to=%q", terr, tc.from, tc.to)
+				}
+				// Rejected moves leave the stored state untouched.
+				got, _ := st.GetIncident(ctx, id)
+				if got == nil || got.State != tc.from {
+					t.Errorf("state after rejected move = %+v, want %q", got, tc.from)
+				}
+			}
+		})
+	}
+}
+
 func TestSyncServices(t *testing.T) {
 	st := openTest(t)
 	ctx := t.Context()

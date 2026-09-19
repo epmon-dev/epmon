@@ -247,16 +247,34 @@ func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity s
 }
 
 // UpdateIncident mutates title/severity/state in a single atomic UPDATE;
-// empty args keep the field. Unknown id → ErrNotFound (SQLite reports
-// matched rows, so zero means the id names nothing).
+// empty args keep the field. State moves are forward-only
+// (investigating -> monitoring -> resolved, skips legal); a backward move
+// is rejected with TransitionError instead of applied. Unknown id →
+// ErrNotFound.
+//
+// The transition guard lives in the UPDATE itself so concurrent PATCHes
+// cannot interleave a regression: every committed state move is forward
+// relative to the row at execution time. A rejected concurrent move fails
+// closed (retryable) rather than clobbering.
 func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error {
+	var current string
+	if err := s.db.QueryRowContext(ctx, `SELECT state FROM incidents WHERE id=?`, id).Scan(&current); err != nil {
+		if err == sql.ErrNoRows {
+			return store.ErrNotFound
+		}
+		return err
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE incidents SET
 			title = CASE WHEN ? <> '' THEN ? ELSE title END,
 			severity = CASE WHEN ? IN ('minor','major','critical') THEN ? ELSE severity END,
 			state = CASE WHEN ? IN ('investigating','monitoring','resolved') THEN ? ELSE state END,
-			updated_at = ? WHERE id = ?`,
+			updated_at = ? WHERE id = ?
+			AND (? = '' OR ? = state OR ? NOT IN ('investigating','monitoring','resolved') OR
+				CASE ? WHEN 'investigating' THEN 0 WHEN 'monitoring' THEN 1 WHEN 'resolved' THEN 2 ELSE -1 END >
+				CASE state WHEN 'investigating' THEN 0 WHEN 'monitoring' THEN 1 WHEN 'resolved' THEN 2 ELSE -1 END)`,
 		title, title, severity, severity, state, state, now.Unix(), id,
+		state, state, state, state,
 	)
 	if err != nil {
 		return err
@@ -266,7 +284,7 @@ func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, s
 		return err
 	}
 	if n == 0 {
-		return store.ErrNotFound
+		return &store.TransitionError{From: current, To: state}
 	}
 	return nil
 }
