@@ -131,11 +131,16 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// getConfigArg returns the value after --config in args, or the default.
+// getConfigArg returns the value after -config/--config in args, or the
+// default. Both dash forms (and --config=<path>) are accepted: the README,
+// the usage strings and the Dockerfile all spell the single-dash form.
 func getConfigArg(args []string, defaultPath string) string {
 	for i, arg := range args {
-		if arg == "--config" && i+1 < len(args) {
+		if (arg == "--config" || arg == "-config") && i+1 < len(args) {
 			return args[i+1]
+		}
+		if v, ok := strings.CutPrefix(arg, "--config="); ok {
+			return v
 		}
 	}
 	return defaultPath
@@ -161,6 +166,10 @@ func printVersion(stdout, stderr io.Writer) int {
 	return exitOK
 }
 
+// healthcheckTimeout bounds the readiness probe client. It matches the
+// Dockerfile HEALTHCHECK --timeout so the CLI and the container agree.
+var healthcheckTimeout = 5 * time.Second
+
 // healthcheckEndpoint checks the health endpoint of the given URL and returns exitOK if healthy, exitUnavail otherwise.
 // Usage: epmon healthcheck --endpoint <url>
 func healthcheckEndpoint(args []string, stdout, stderr io.Writer) int {
@@ -169,7 +178,8 @@ func healthcheckEndpoint(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "epmon: healthcheck error: --endpoint required\n")
 		return exitUsage
 	}
-	resp, err := http.Get(endpoint + "/healthz")
+	client := &http.Client{Timeout: healthcheckTimeout}
+	resp, err := client.Get(strings.TrimSuffix(endpoint, "/") + "/healthz")
 	if err != nil {
 		fmt.Fprintf(stderr, "epmon: healthcheck error: %v\n", err)
 		return exitUnavail
@@ -183,11 +193,15 @@ func healthcheckEndpoint(args []string, stdout, stderr io.Writer) int {
 	return exitUnavail
 }
 
-// getEndpointArg returns the value after --endpoint in args, or empty string.
+// getEndpointArg returns the value after -endpoint/--endpoint in args,
+// or empty string. Both dash forms (and --endpoint=<url>) are accepted.
 func getEndpointArg(args []string) string {
 	for i, arg := range args {
-		if arg == "--endpoint" && i+1 < len(args) {
+		if (arg == "--endpoint" || arg == "-endpoint") && i+1 < len(args) {
 			return args[i+1]
+		}
+		if v, ok := strings.CutPrefix(arg, "--endpoint="); ok {
+			return v
 		}
 	}
 	return ""
