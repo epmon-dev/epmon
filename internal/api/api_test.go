@@ -285,6 +285,32 @@ func TestRemovedServiceHistory(t *testing.T) {
 	}
 }
 
+func TestIncidentListPaging(t *testing.T) {
+	srv, st := testServer(t)
+	h := srv.Handler()
+	ctx := t.Context()
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+
+	for _, title := range []string{"P1", "P2", "P3"} {
+		if _, err := st.CreateIncident(ctx, "web", title, "minor", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, body, _ := do(t, h, "GET", "/api/v1/incidents?limit=2", "")
+	if code != 200 || body["total"] != float64(3) || len(body["incidents"].([]any)) != 2 {
+		t.Errorf("limit=2 = %d %v, want 2 rows of 3", code, body)
+	}
+	code, body, _ = do(t, h, "GET", "/api/v1/incidents?limit=2&offset=2", "")
+	if code != 200 || body["total"] != float64(3) || len(body["incidents"].([]any)) != 1 {
+		t.Errorf("offset=2 = %d %v, want 1 row of 3", code, body)
+	}
+	for _, bad := range []string{"?limit=0", "?limit=x", "?limit=999999", "?offset=-1", "?offset=x"} {
+		if code, _, _ := do(t, h, "GET", "/api/v1/incidents"+bad, ""); code != 400 {
+			t.Errorf("incidents%s = %d, want 400", bad, code)
+		}
+	}
+}
+
 func TestOpenAPISpecParity(t *testing.T) {
 	srv, _ := testServer(t)
 	h := srv.Handler()

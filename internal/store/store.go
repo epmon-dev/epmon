@@ -95,9 +95,14 @@ type CheckReader interface {
 }
 
 // IncidentFilter narrows ListIncidents. Empty fields disable that filter.
+// Limit caps the page (<=0 means unbounded for direct store users; the
+// API always passes a validated bound). Offset skips that many newest-first
+// rows.
 type IncidentFilter struct {
 	State     string // investigating|monitoring|resolved, "" = any
 	ServiceID string // "" = any service
+	Limit     int
+	Offset    int
 }
 
 // IncidentStore is the manual incident log.
@@ -109,6 +114,9 @@ type IncidentStore interface {
 	GetIncident(ctx context.Context, id int64) (*Incident, error)
 	// ListIncidents returns newest-first incidents matching the filter.
 	ListIncidents(ctx context.Context, f IncidentFilter) ([]Incident, error)
+	// CountIncidents returns the total matches for the filter's State and
+	// ServiceID (ignoring Limit/Offset), for paged responses.
+	CountIncidents(ctx context.Context, f IncidentFilter) (int, error)
 	// UpdateIncident mutates title/severity/state; empty args keep the field.
 	// State must be investigating|monitoring|resolved. Unknown id → ErrNotFound.
 	UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error
