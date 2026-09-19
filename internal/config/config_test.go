@@ -114,6 +114,41 @@ services:
 	}
 }
 
+// TestEnvSubstitutionForms locks the documented contract: ${VAR} and
+// ${VAR:-fallback} expand, $$ collapses to $, and a bare $VAR is left
+// untouched (with a stderr hint, asserted only by behavior here).
+func TestEnvSubstitutionForms(t *testing.T) {
+	t.Setenv("EPMON_FORM_TOKEN", "s3cret")
+	t.Setenv("EPMON_FORM_EMPTY", "")
+	path := writeTemp(t, "config.yaml", `
+services:
+  - id: web
+    url: https://example.com
+    headers:
+      Braced: "Bearer ${EPMON_FORM_TOKEN}"
+      Fallback: "Bearer ${EPMON_FORM_UNSET:-d3fault}"
+      EmptyFallback: "Bearer ${EPMON_FORM_EMPTY:-d3fault}"
+      Escaped: "price $$5"
+      Bare: "Bearer $EPMON_FORM_TOKEN"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	h := cfg.Services[0].Headers
+	for k, want := range map[string]string{
+		"Braced":        "Bearer s3cret",
+		"Fallback":      "Bearer d3fault",
+		"Emptyfallback": "Bearer d3fault",
+		"Escaped":       "price $5",
+		"Bare":          "Bearer $EPMON_FORM_TOKEN",
+	} {
+		if h[k] != want {
+			t.Errorf("%s = %q, want %q", k, h[k], want)
+		}
+	}
+}
+
 func TestServerValidation(t *testing.T) {
 	cases := map[string]string{
 		"tls half-set":    "server: {tls_cert: /c.pem}\nservices:\n  - {id: a, url: https://example.com}",
