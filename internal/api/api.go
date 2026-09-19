@@ -474,6 +474,10 @@ func (s *Server) addUpdate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusNotFound, "not_found", "unknown incident")
 			return
 		}
+		if errors.Is(err, store.ErrInvalid) {
+			writeErr(w, http.StatusBadRequest, "bad_request", "text must be 1..2000 characters")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "internal", "store write failed")
 		return
 	}
