@@ -32,7 +32,12 @@ type serviceStats struct {
 	skipped          int64
 	stateUp          bool
 	known            bool
-	observations     []float64 // seconds, for the histogram
+	// buckets counts samples per duration bucket (last slot is the +Inf
+	// overflow); sum/count feed the histogram sum and count. Constant
+	// size per service regardless of uptime — samples are never stored.
+	buckets []uint64
+	sum     float64
+	count   uint64
 }
 
 // Registry accumulates the §10.1 catalog.
@@ -71,7 +76,10 @@ func (r *Registry) ObserveProbe(serviceID string, rawUp, stateUp bool, latency t
 	}
 	st.stateUp = stateUp
 	st.known = true
-	st.observations = append(st.observations, latency.Seconds())
+	secs := latency.Seconds()
+	st.buckets[sort.SearchFloat64s(durationBuckets, secs)]++
+	st.sum += secs
+	st.count++
 }
 
 // ObserveCheck is the legacy write path: up flag plus integer milliseconds
@@ -91,7 +99,7 @@ func (r *Registry) ObserveSkipped(serviceID string) {
 func (r *Registry) statLocked(id string) *serviceStats {
 	st, ok := r.services[id]
 	if !ok {
-		st = &serviceStats{}
+		st = &serviceStats{buckets: make([]uint64, len(durationBuckets)+1)}
 		r.services[id] = st
 	}
 	return st
@@ -185,26 +193,15 @@ func (r *Registry) Snapshot() string {
 	b.WriteString("# TYPE epmon_probe_duration_seconds histogram\n")
 	for _, id := range ids {
 		st := r.services[id]
-		sorted := append([]float64(nil), st.observations...)
-		sort.Float64s(sorted)
 		var cum uint64
-		for _, le := range durationBuckets {
-			cum = 0
-			for _, v := range sorted {
-				if v <= le {
-					cum++
-				}
-			}
+		for i, le := range durationBuckets {
+			cum += st.buckets[i]
 			fmt.Fprintf(&b, "epmon_probe_duration_seconds_bucket{service=\"%s\",le=\"%g\"} %d\n", escapeLabel(id), le, cum)
 		}
-		cum = uint64(len(sorted))
+		cum += st.buckets[len(durationBuckets)]
 		fmt.Fprintf(&b, "epmon_probe_duration_seconds_bucket{service=\"%s\",le=\"+Inf\"} %d\n", escapeLabel(id), cum)
-		sum := 0.0
-		for _, v := range sorted {
-			sum += v
-		}
-		fmt.Fprintf(&b, "epmon_probe_duration_seconds_sum{service=\"%s\"} %g\n", escapeLabel(id), sum)
-		fmt.Fprintf(&b, "epmon_probe_duration_seconds_count{service=\"%s\"} %d\n", escapeLabel(id), cum)
+		fmt.Fprintf(&b, "epmon_probe_duration_seconds_sum{service=\"%s\"} %g\n", escapeLabel(id), st.sum)
+		fmt.Fprintf(&b, "epmon_probe_duration_seconds_count{service=\"%s\"} %d\n", escapeLabel(id), st.count)
 	}
 	b.WriteString("# HELP epmon_probe_skipped_total Overlap-guard skips.\n")
 	b.WriteString("# TYPE epmon_probe_skipped_total counter\n")
