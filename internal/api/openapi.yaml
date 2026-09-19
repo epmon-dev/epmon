@@ -249,6 +249,9 @@ paths:
               properties:
                 text:
                   type: string
+                  minLength: 1
+                  maxLength: 2000
+                  description: Counted in characters; longer texts are rejected with 400.
       responses:
         '201':
           description: Updated incident. Location header points at it.

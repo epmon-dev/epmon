@@ -229,6 +229,19 @@ func TestIncidentLifecycle(t *testing.T) {
 	if code != 200 || body["total"] != float64(0) {
 		t.Errorf("filter service=other = %d %v", code, body)
 	}
+	code, body, _ = do(t, h, "GET", "/api/v1/incidents?state=bogus", "")
+	if code != 400 || body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Errorf("filter state=bogus = %d %v, want 400/bad_request", code, body)
+	}
+
+	// Update text is bounded to 1..2000 characters (runes), enforced in
+	// the store and surfaced as 400 here.
+	if code, body, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2001))); code != 400 || body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Errorf("oversize update = %d %v, want 400/bad_request", code, body)
+	}
+	if code, _, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2000))); code != 201 {
+		t.Errorf("2000-char update = %d, want 201", code)
+	}
 	// critical round-trips end to end instead of downgrading to minor.
 	if code, body, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"Outage","severity":"critical"}`); code != 201 || body["severity"] != "critical" {
 		t.Errorf("create critical = %d %v, want 201/critical", code, body)
