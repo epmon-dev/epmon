@@ -109,6 +109,7 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 	}
 
 	registry := metrics.New()
+	registry.SetBuildInfo(version, commit)
 	sched := scheduler.New(cfg, st, registry)
 	sched.Run(ctx)
 	defer sched.Stop()

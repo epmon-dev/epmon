@@ -207,12 +207,12 @@ won't be renamed.
 | `epmon_service_up` | gauge | Alerting: `epmon_service_up == 0` pages. State, not last probe. |
 | `epmon_probe_total{result="success"\|"failure"}` | counter | Raw outcome rates; burn-rate alerts. |
 | `epmon_probe_duration_seconds` | histogram | Latency: `histogram_quantile(0.99, sum(rate(epmon_probe_duration_seconds_bucket[5m])) by (service, le))` for p99 degradation and slow drift. Buckets: 5ms…10s. |
-| `epmon_probe_skipped_total` | counter | Overlap-guard skips (scheduler shed load). |
-| `epmon_store_queue_depth`, `epmon_store_cmd_queue_depth` | gauges | Internal backpressure; sustained non-zero deserves a look. |
-| `epmon_store_dropped_total`, `epmon_store_write_timeout_total` | counters | Lost or aborted writes — alert on increase. |
-| `epmon_service_history_migrated_total{result="ok"\|"no_match"}` | counter | Alias-migration outcomes after reloads. |
-| `epmon_config_reload_total{result="ok"\|"error"}` | counter | Config reload outcomes. |
-| `epmon_uptime_seconds`, `epmon_build_info` | gauge | Process age and build identity. |
+| `epmon_probe_skipped_total` | counter | Reserved: overlap-guard skips (no guard exists yet; always zero). |
+| `epmon_store_queue_depth`, `epmon_store_cmd_queue_depth` | gauges | Reserved: internal backpressure hooks for a future store actor; always zero. |
+| `epmon_store_dropped_total`, `epmon_store_write_timeout_total` | counters | Reserved: unwritable today, so permanently zero — do not alert on them. |
+| `epmon_service_history_migrated_total{result="ok"\|"no_match"}` | counter | Reserved: alias-migration outcomes (no migration path exists yet). |
+| `epmon_config_reload_total{result="ok"\|"error"}` | counter | Reserved: config reload outcomes (no reload path exists yet). |
+| `epmon_uptime_seconds`, `epmon_build_info` | gauge | Process age and build identity (`version`/`commit` from release ldflags). |
 
 ## Development
 
