@@ -279,7 +279,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad_request", "limit must be 1..500")
 		return
 	}
-	buckets, err := s.store.DailyHistory(r.Context(), id, days, s.now())
+	buckets, err := s.store.DailyHistory(r.Context(), id, days, s.now(), s.cfg.Location())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal", "store read failed")
 		return
