@@ -9,11 +9,31 @@ package store
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 )
 
 // ErrNotFound is returned when an incident id names nothing.
 var ErrNotFound = errors.New("store: not found")
+
+// TransitionError reports a rejected backward incident state move,
+// carrying the from→to pair for 409 responses.
+type TransitionError struct {
+	From string
+	To   string
+}
+
+// Error implements error.
+func (e *TransitionError) Error() string {
+	return "invalid state transition from " + strconv.Quote(e.From) + " to " + strconv.Quote(e.To)
+}
+
+// ErrInvalid is returned when input fails domain validation
+// (e.g. over-long incident update text).
+var ErrInvalid = errors.New("store: invalid")
+
+// MaxUpdateRunes bounds incident update text to 1..2000 runes.
+const MaxUpdateRunes = 2000
 
 // Check is one recorded probe result.
 type Check struct {
@@ -71,13 +91,20 @@ type CheckReader interface {
 	LastCheck(ctx context.Context, serviceID string) (*Check, error)
 	RecentChecks(ctx context.Context, serviceID string, limit int) ([]Check, error)
 	// DailyHistory returns days oldest-first, nil Up for probeless days.
-	DailyHistory(ctx context.Context, serviceID string, days int, now time.Time) ([]DayBucket, error)
+	// Buckets are cut at local midnights in loc (history.timezone); a nil
+	// loc means UTC.
+	DailyHistory(ctx context.Context, serviceID string, days int, now time.Time, loc *time.Location) ([]DayBucket, error)
 }
 
 // IncidentFilter narrows ListIncidents. Empty fields disable that filter.
+// Limit caps the page (<=0 means unbounded for direct store users; the
+// API always passes a validated bound). Offset skips that many newest-first
+// rows.
 type IncidentFilter struct {
 	State     string // investigating|monitoring|resolved, "" = any
 	ServiceID string // "" = any service
+	Limit     int
+	Offset    int
 }
 
 // IncidentStore is the manual incident log.
@@ -89,6 +116,9 @@ type IncidentStore interface {
 	GetIncident(ctx context.Context, id int64) (*Incident, error)
 	// ListIncidents returns newest-first incidents matching the filter.
 	ListIncidents(ctx context.Context, f IncidentFilter) ([]Incident, error)
+	// CountIncidents returns the total matches for the filter's State and
+	// ServiceID (ignoring Limit/Offset), for paged responses.
+	CountIncidents(ctx context.Context, f IncidentFilter) (int, error)
 	// UpdateIncident mutates title/severity/state; empty args keep the field.
 	// State must be investigating|monitoring|resolved. Unknown id → ErrNotFound.
 	UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/epmon-dev/epmon/internal/config"
@@ -27,13 +28,23 @@ func bodyCap(svc config.Service) int64 {
 	return maxBody
 }
 
-// Probe performs one check. Transport errors, unexpected status codes and
-// body mismatches all report Up=false with a short machine-readable error.
-// ctx cancels the request; the timeout still bounds the whole attempt.
-func Probe(ctx context.Context, svc config.Service) store.Check {
-	start := time.Now()
-	check := store.Check{ServiceID: svc.ID, TS: start.Unix()}
+// clientKey distinguishes the transport configurations probes need.
+// Redirect policy joins the key so follow_redirects=false (#4) keeps its
+// own client instead of inheriting another service's policy.
+type clientKey struct {
+	insecure, noFollow bool
+}
 
+// sharedClients caches one *http.Client per transport configuration for
+// the life of the process, so keep-alive connections are reused across
+// probes instead of re-handshaking every check.
+var sharedClients sync.Map // clientKey -> *http.Client
+
+func clientFor(svc config.Service) *http.Client {
+	key := clientKey{svc.InsecureSkipVerify, !svc.FollowRedirectsOrDefault()}
+	if v, ok := sharedClients.Load(key); ok {
+		return v.(*http.Client)
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if svc.InsecureSkipVerify {
 		if transport.TLSClientConfig == nil {
@@ -41,7 +52,37 @@ func Probe(ctx context.Context, svc config.Service) store.Check {
 		}
 		transport.TLSClientConfig.InsecureSkipVerify = true
 	}
-	client := &http.Client{Transport: transport, Timeout: svc.Timeout.Std()}
+	// No Client.Timeout here: per-service deadlines live on the request
+	// context (see below), so services with different timeouts can share
+	// a client safely.
+	client := &http.Client{Transport: transport}
+	if !svc.FollowRedirectsOrDefault() {
+		// Surface the redirect response itself (status + headers) instead
+		// of the landing page, so expect_status asserts the configured URL.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	actual, _ := sharedClients.LoadOrStore(key, client)
+	return actual.(*http.Client)
+}
+
+// drainAndClose consumes any unread body so the keep-alive connection can
+// be reused, then closes it. The copy is bounded by the request context
+// deadline set in Probe.
+func drainAndClose(res *http.Response) {
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
+}
+
+// Probe performs one check. Transport errors, unexpected status codes and
+// body mismatches all report Up=false with a short machine-readable error.
+// ctx cancels the request; the timeout still bounds the whole attempt.
+func Probe(ctx context.Context, svc config.Service) store.Check {
+	start := time.Now()
+	check := store.Check{ServiceID: svc.ID, TS: start.Unix()}
+
+	client := clientFor(svc)
 
 	ctx, cancel := context.WithTimeout(ctx, svc.Timeout.Std())
 	defer cancel()
@@ -63,7 +104,7 @@ func Probe(ctx context.Context, svc config.Service) store.Check {
 		check.Error = "transport: " + shortErr(err)
 		return check
 	}
-	defer res.Body.Close()
+	defer drainAndClose(res)
 	check.StatusCode = res.StatusCode
 
 	ok := svc.ExpectStatus.Matches(res.StatusCode)

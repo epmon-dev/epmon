@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,41 @@ services:
 	}
 }
 
+// TestEnvSubstitutionForms locks the documented contract: ${VAR} and
+// ${VAR:-fallback} expand, $$ collapses to $, and a bare $VAR is left
+// untouched (with a stderr hint, asserted only by behavior here).
+func TestEnvSubstitutionForms(t *testing.T) {
+	t.Setenv("EPMON_FORM_TOKEN", "s3cret")
+	t.Setenv("EPMON_FORM_EMPTY", "")
+	path := writeTemp(t, "config.yaml", `
+services:
+  - id: web
+    url: https://example.com
+    headers:
+      Braced: "Bearer ${EPMON_FORM_TOKEN}"
+      Fallback: "Bearer ${EPMON_FORM_UNSET:-d3fault}"
+      EmptyFallback: "Bearer ${EPMON_FORM_EMPTY:-d3fault}"
+      Escaped: "price $$5"
+      Bare: "Bearer $EPMON_FORM_TOKEN"
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	h := cfg.Services[0].Headers
+	for k, want := range map[string]string{
+		"Braced":        "Bearer s3cret",
+		"Fallback":      "Bearer d3fault",
+		"Emptyfallback": "Bearer d3fault",
+		"Escaped":       "price $5",
+		"Bare":          "Bearer $EPMON_FORM_TOKEN",
+	} {
+		if h[k] != want {
+			t.Errorf("%s = %q, want %q", k, h[k], want)
+		}
+	}
+}
+
 func TestRemovedKnobsRejected(t *testing.T) {
 	// storage.path / storage.retention.* / api.rate_limit were validated
 	// but never read; they are gone, and the strict loader must say so
@@ -205,10 +241,18 @@ services:
 }
 
 func TestValidateEmptyExpectStatus(t *testing.T) {
-	// Unreachable via Load (empty lists take the default); Validate still guards it.
-	cfg := &Config{Services: []Service{{ID: "a", URL: "https://example.com"}}}
+	// Isolate the expect_status dimension: every other field is valid, so
+	// only an empty code list can fail validation.
+	cfg := Default()
+	cfg.Services = []Service{{
+		ID: "a", Name: "A", URL: "https://example.com", Method: "GET",
+		Interval: Duration(60 * time.Second), Timeout: Duration(10 * time.Second),
+		FailureThreshold: 1,
+	}}
 	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for empty expect_status")
+		t.Fatal("expected error for empty expect_status")
+	} else if got := err.Error(); !strings.Contains(got, "expect_status") {
+		t.Fatalf("error %q does not name expect_status", got)
 	}
 }
 

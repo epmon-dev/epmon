@@ -50,6 +50,15 @@ docker compose up --build -d
 curl localhost:8080/healthz   # {"ok":true}
 ```
 
+Stamp release metadata into the image so it never reports `dev`:
+
+```sh
+VERSION=$(git describe --tags --always --dirty) \
+COMMIT=$(git rev-parse --short HEAD) \
+DATE=$(date -u +%FT%TZ) docker compose up --build -d
+docker exec epmon /epmon version   # epmon <version> (commit <sha>, built <date>, ...)
+```
+
 Interactive API reference lives at `/docs` once it's running; the raw
 contract at `/api/v1/openapi.yaml` (or `.json`).
 
@@ -83,8 +92,11 @@ curl -s "localhost:8080/api/v1/services/api/history?days=90" | jq '{uptime_pct, 
 
 ## Configuration
 
-Format follows the extension (`.yaml`/`.yml` vs `.json`); `$VAR`/`${VAR}`
-expand from the environment — keep tokens out of the file.
+Format follows the extension (`.yaml`/`.yml` vs `.json`); only
+`${VAR}` (or `${VAR:-fallback}`) expands from the environment — keep
+tokens out of the file. `$$` is a literal `$`; a bare `$VAR` is left
+untouched, so a literal `$EPMON_API_KEY` as a key would be guessable —
+always use braces.
 
 ```yaml
 server:
@@ -103,10 +115,10 @@ database:
   dsn: "epmon.db"      # adapter connection string (":memory:" = ephemeral)
   retention_days: 90
 
-defaults:                 # every field overridable per service
-  interval: 60s
-  timeout: 10s
-  expect_status: [200]
+probes:                   # defaults; every field overridable per service
+  default_interval: 60s
+  default_timeout: 10s
+  failure_threshold: 1
 
 services:
   - id: website           # required, unique; name defaults to id
@@ -120,13 +132,18 @@ services:
     expect_status: [200]
     headers:
       Authorization: "Bearer ${TOKEN}"
-    # tls_skip_verify: true   # only for boxes you own
+    # insecure_skip_verify: true   # only for boxes you own
 ```
 
 A probe is **up** when it answers within `timeout` with a status in
 `expect_status` (after redirects) and — if set — the body contains
 `body_contains`. Anything else stores `up: false` with a short error
 (`transport: …`, `status: got 500`, `body: …`).
+
+Config location, in order: `--config <path>`, `EPMON_CONFIG`,
+`./epmon.yaml`, `/etc/epmon/epmon.yaml`, then `config.yaml`.
+Exit codes: `0` ok, `1` config error, `2` storage error, `3` listen/bind
+error, `4` failed `healthcheck`, `64` usage error.
 
 ## API (`/api/v1`)
 
@@ -178,6 +195,24 @@ service at one probe/minute over 90 days.
   `epmon_service_up == 0`.
 - **Data:** back up the SQLite file — hot copies while running are safe —
   or mount the volume into your backup job.
+
+## Metrics (`/metrics`, Prometheus text format)
+
+Scrape it like any Prometheus target. Per-service series carry a
+`service="<id>"` label; names and labels are compatibility surface and
+won't be renamed.
+
+| Metric | Kind | Use it for |
+|---|---|---|
+| `epmon_service_up` | gauge | Alerting: `epmon_service_up == 0` pages. State, not last probe. |
+| `epmon_probe_total{result="success"\|"failure"}` | counter | Raw outcome rates; burn-rate alerts. |
+| `epmon_probe_duration_seconds` | histogram | Latency: `histogram_quantile(0.99, sum(rate(epmon_probe_duration_seconds_bucket[5m])) by (service, le))` for p99 degradation and slow drift. Buckets: 5ms…10s. |
+| `epmon_probe_skipped_total` | counter | Overlap-guard skips (scheduler shed load). |
+| `epmon_store_queue_depth`, `epmon_store_cmd_queue_depth` | gauges | Internal backpressure; sustained non-zero deserves a look. |
+| `epmon_store_dropped_total`, `epmon_store_write_timeout_total` | counters | Lost or aborted writes — alert on increase. |
+| `epmon_service_history_migrated_total{result="ok"\|"no_match"}` | counter | Alias-migration outcomes after reloads. |
+| `epmon_config_reload_total{result="ok"\|"error"}` | counter | Config reload outcomes. |
+| `epmon_uptime_seconds`, `epmon_build_info` | gauge | Process age and build identity. |
 
 ## Development
 

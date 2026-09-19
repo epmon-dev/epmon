@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSnapshot(t *testing.T) {
@@ -25,6 +26,49 @@ func TestSnapshot(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("snapshot missing %q\n%s", want, out)
 		}
+	}
+}
+
+// TestHistogramBuckets pins cumulative bucket boundaries: 5ms lands in
+// le=0.005, 50ms in le=0.05, 5s in le=5.
+func TestHistogramBuckets(t *testing.T) {
+	r := New()
+	r.ObserveProbe("web", true, true, 5*time.Millisecond)
+	r.ObserveProbe("web", true, true, 50*time.Millisecond)
+	r.ObserveProbe("web", true, true, 5*time.Second)
+
+	out := r.Snapshot()
+	for _, want := range []string{
+		`epmon_probe_duration_seconds_bucket{service="web",le="0.005"} 1`,
+		`epmon_probe_duration_seconds_bucket{service="web",le="0.05"} 2`,
+		`epmon_probe_duration_seconds_bucket{service="web",le="5"} 3`,
+		`epmon_probe_duration_seconds_bucket{service="web",le="+Inf"} 3`,
+		`epmon_probe_duration_seconds_count{service="web"} 3`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("snapshot missing %q\n%s", want, out)
+		}
+	}
+}
+
+// TestHistogramBoundedState proves per-service histogram state is constant
+// size no matter how many samples flow through it.
+func TestHistogramBoundedState(t *testing.T) {
+	r := New()
+	const n = 200000
+	for i := 0; i < n; i++ {
+		r.ObserveProbe("web", true, true, time.Duration(i%1000)*time.Millisecond)
+	}
+	st := r.services["web"]
+	if len(st.buckets) != len(durationBuckets)+1 {
+		t.Fatalf("buckets = %d slots, want %d", len(st.buckets), len(durationBuckets)+1)
+	}
+	if st.count != n {
+		t.Errorf("count = %d, want %d", st.count, n)
+	}
+	out := r.Snapshot()
+	if want := `epmon_probe_duration_seconds_count{service="web"} 200000`; !strings.Contains(out, want) {
+		t.Errorf("snapshot missing %q", want)
 	}
 }
 
