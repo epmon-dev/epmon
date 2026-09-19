@@ -60,17 +60,32 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// resolveConfigPath picks the config file: explicit --config flag first,
+// then EPMON_CONFIG / ./epmon.yaml / /etc/epmon/epmon.yaml discovery,
+// then the legacy config.yaml default.
+func resolveConfigPath(args []string) string {
+	if p := getConfigArg(args, ""); p != "" {
+		return p
+	}
+	if p := config.DiscoverPath(""); p != "" {
+		return p
+	}
+	return "config.yaml"
+}
+
 // runDefault runs epmon with the given configuration (default path, no subcommand).
 func runDefault(args []string, stdout, stderr io.Writer) int {
-	configPath := getConfigArg(args, "config.yaml")
+	configPath := resolveConfigPath(args)
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("epmon: %v", err)
+		fmt.Fprintf(stderr, "epmon: %v\n", err)
+		return exitConfig
 	}
 
 	st, err := store.Open(context.Background(), cfg.Database.Driver, cfg.Database.DSN)
 	if err != nil {
-		log.Fatalf("epmon: %v", err)
+		fmt.Fprintf(stderr, "epmon: %v\n", err)
+		return exitStorage
 	}
 	defer st.Close()
 
@@ -79,10 +94,12 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		metas = append(metas, store.ServiceMeta{ID: svc.ID, Name: svc.Name, URL: svc.URL})
 	}
 	if err := st.SyncServices(context.Background(), metas, time.Now()); err != nil {
-		log.Fatalf("epmon: sync services: %v", err)
+		fmt.Fprintf(stderr, "epmon: sync services: %v\n", err)
+		return exitStorage
 	}
 	if n, err := st.Purge(context.Background(), cfg.Database.RetentionDays, time.Now()); err != nil {
-		log.Fatalf("epmon: initial purge: %v", err)
+		fmt.Fprintf(stderr, "epmon: initial purge: %v\n", err)
+		return exitStorage
 	} else if n > 0 {
 		log.Printf("epmon: purged %d expired checks on boot", n)
 	}
@@ -110,6 +127,9 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	// serveErr carries a bind/serve failure back to runDefault so boot can
+	// report exitListen instead of hanging until the next signal.
+	serveErr := make(chan error, 1)
 	go func() {
 		log.Printf("epmon: watching %d service(s), API on %s", len(cfg.Services), cfg.Server.Addr)
 		var err error
@@ -119,11 +139,18 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 			err = srv.ListenAndServe()
 		}
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("epmon: serve: %v", err)
+			serveErr <- err
 		}
 	}()
 
-	<-ctx.Done()
+	select {
+	case err := <-serveErr:
+		fmt.Fprintf(stderr, "epmon: serve: %v\n", err)
+		stop()
+		return exitListen
+	case <-ctx.Done():
+	}
+
 	log.Printf("epmon: shutting down")
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -145,7 +172,7 @@ func getConfigArg(args []string, defaultPath string) string {
 // No database or network access is required.
 // Usage: epmon validate --config <path>
 func validateConfig(args []string, stdout, stderr io.Writer) int {
-	configPath := getConfigArg(args[1:], "config.yaml") // skip "validate"
+	configPath := resolveConfigPath(args[1:]) // skip "validate"
 	_, err := config.Load(configPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "epmon: validate error: %v\n", err)
