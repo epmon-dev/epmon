@@ -498,10 +498,25 @@ func (s *Server) addUpdate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, incident)
 }
 
-// Log decorates h with one request line. Kept tiny on purpose.
+// statusRecorder captures the response code for request logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// Log decorates h with one outcome line per request: method, path, status
+// and latency. Handler error responses are visible here, so a 500 leaves
+// a trace server-side instead of only reaching the client.
 func Log(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.ServeHTTP(w, r)
-		log.Printf("epmon: %s %s", r.Method, r.URL.Path)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		h.ServeHTTP(rec, r)
+		log.Printf("epmon: %s %s %d %s", r.Method, r.URL.Path, rec.status, time.Since(start).Round(time.Millisecond))
 	})
 }
