@@ -152,14 +152,20 @@ func (s *Scheduler) purgeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := s.checks.Purge(ctx, s.cfg.Database.RetentionDays, time.Now())
-			if err != nil {
-				log.Printf("epmon: purge: %v", err)
-				continue
-			}
-			if n > 0 {
-				log.Printf("epmon: purged %d expired checks", n)
-			}
+			s.purgeOnce(ctx)
 		}
+	}
+}
+
+// purgeOnce runs a single retention purge. A failing purge logs and
+// returns; the daily loop continues on the next tick.
+func (s *Scheduler) purgeOnce(ctx context.Context) {
+	n, err := s.checks.Purge(ctx, s.cfg.Database.RetentionDays, time.Now())
+	if err != nil {
+		log.Printf("epmon: purge: %v", err)
+		return
+	}
+	if n > 0 {
+		log.Printf("epmon: purged %d expired checks", n)
 	}
 }
