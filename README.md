@@ -103,10 +103,10 @@ database:
   dsn: "epmon.db"      # adapter connection string (":memory:" = ephemeral)
   retention_days: 90
 
-defaults:                 # every field overridable per service
-  interval: 60s
-  timeout: 10s
-  expect_status: [200]
+probes:                   # defaults; every field overridable per service
+  default_interval: 60s
+  default_timeout: 10s
+  failure_threshold: 1
 
 services:
   - id: website           # required, unique; name defaults to id
@@ -120,7 +120,7 @@ services:
     expect_status: [200]
     headers:
       Authorization: "Bearer ${TOKEN}"
-    # tls_skip_verify: true   # only for boxes you own
+    # insecure_skip_verify: true   # only for boxes you own
 ```
 
 A probe is **up** when it answers within `timeout` with a status in
