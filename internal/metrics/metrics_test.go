@@ -72,6 +72,19 @@ func TestHistogramBoundedState(t *testing.T) {
 	}
 }
 
+// TestBuildInfo pins the stamped build identity line. The binary wires
+// its ldflags version/commit into the registry at boot (see runDefault);
+// an empty rendering means that wiring regressed.
+func TestBuildInfo(t *testing.T) {
+	r := New()
+	r.SetBuildInfo("v1.2.3", "abc1234")
+	out := r.Snapshot()
+	want := `epmon_build_info{version="v1.2.3",commit="abc1234"} 1`
+	if !strings.Contains(out, want) {
+		t.Errorf("snapshot missing %q\n%s", want, out)
+	}
+}
+
 func TestHandler(t *testing.T) {
 	r := New()
 	h := r.Handler()
