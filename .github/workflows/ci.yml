@@ -20,5 +20,25 @@ jobs:
             grep -Eq "$entry" .dockerignore || { echo "missing $entry in .dockerignore"; exit 1; }
           done
       - run: go build ./...
+      - name: documented configs validate
+        run: |
+          export EPMON_API_KEY=ci-dummy TOKEN=ci-dummy DEV_TOKEN=ci-dummy
+          python3 - <<'EOF'
+          import os, re, subprocess, tempfile
+          blocks = re.findall(r'```yaml\n(.*?)```', open('README.md').read(), re.S)
+          assert blocks, "no yaml blocks found in README"
+          for i, b in enumerate(blocks):
+              with tempfile.NamedTemporaryFile('w', suffix='.yaml', delete=False) as f:
+                  f.write(b)
+                  path = f.name
+              r = subprocess.run(['go', 'run', './cmd/epmon', 'validate', '--config', path],
+                                 capture_output=True, text=True)
+              print(f"README yaml block {i}: exit={r.returncode} {r.stderr.strip()}")
+              os.unlink(path)
+              if r.returncode != 0:
+                  raise SystemExit(f"README yaml block {i} failed to validate")
+          EOF
+          go run ./cmd/epmon validate --config config.example.yaml
+          go run ./cmd/epmon validate --config config.example.json
       - run: go vet ./...
       - run: go test -race ./...
