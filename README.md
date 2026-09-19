@@ -92,8 +92,11 @@ curl -s "localhost:8080/api/v1/services/api/history?days=90" | jq '{uptime_pct, 
 
 ## Configuration
 
-Format follows the extension (`.yaml`/`.yml` vs `.json`); `$VAR`/`${VAR}`
-expand from the environment — keep tokens out of the file.
+Format follows the extension (`.yaml`/`.yml` vs `.json`); only
+`${VAR}` (or `${VAR:-fallback}`) expands from the environment — keep
+tokens out of the file. `$$` is a literal `$`; a bare `$VAR` is left
+untouched, so a literal `$EPMON_API_KEY` as a key would be guessable —
+always use braces.
 
 ```yaml
 server:

@@ -694,6 +694,22 @@ func warnOnce(key string) {
 	fmt.Fprintf(os.Stderr, "epmon: WARNING: %s: insecure_skip_verify skips TLS verification\n", key)
 }
 
+// warnOncef emits a process-once stderr warning for key.
+func warnOncef(key, format string, args ...any) {
+	if _, loaded := warnOnceSeen.LoadOrStore(key, true); loaded {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "epmon: WARNING: "+format+"\n", args...)
+}
+
+func isNameStart(c byte) bool {
+	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+func isNameChar(c byte) bool {
+	return isNameStart(c) || (c >= '0' && c <= '9')
+}
+
 // Validate enforces every constraint in §4.3. Zero services is valid
 // (idle defaults); bounds and cross-field rules are hard errors.
 func (c *Config) Validate() error {
@@ -846,6 +862,7 @@ func substituteEnv(raw []byte, filename string) ([]byte, error) {
 		line int
 	}
 	var miss []missing
+	var bare []missing
 	line := 1
 	i := 0
 	for i < len(s) {
@@ -886,6 +903,26 @@ func substituteEnv(raw []byte, filename string) ([]byte, error) {
 			i += 2 + end + 1
 			continue
 		}
+		if ch == '$' && i+1 < len(s) && isNameStart(s[i+1]) {
+			// A plausible bare $NAME reference: left untouched (only
+			// ${...} expands), but worth a warning — a literal secret
+			// name here is usually a missing pair of braces.
+			j := i + 1
+			for j < len(s) && isNameChar(s[j]) {
+				j++
+			}
+			name := s[i+1 : j]
+			seen := false
+			for _, b := range bare {
+				if b.name == name {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				bare = append(bare, missing{name, line})
+			}
+		}
 		out.WriteByte(ch)
 		i++
 	}
@@ -895,6 +932,9 @@ func substituteEnv(raw []byte, filename string) ([]byte, error) {
 			parts = append(parts, fmt.Sprintf("%s (line %d)", m.name, m.line))
 		}
 		return nil, fmt.Errorf("%s: missing required environment variables: %s", filename, strings.Join(parts, ", "))
+	}
+	for _, b := range bare {
+		warnOncef("bare-substitution:"+b.name, "%s: line %d: bare $%s left untouched (only ${...} expands)", filename, b.line, b.name)
 	}
 	return []byte(strings.ReplaceAll(out.String(), nulPlaceholder, "$")), nil
 }
