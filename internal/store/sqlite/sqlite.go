@@ -24,7 +24,7 @@ var _ store.Store = (*Store)(nil)
 func init() {
 	// Self-registration: importing this package (even blank) makes the
 	// "sqlite" driver available to store.Open. No caller names this type.
-	store.Register("sqlite", func(_ context.Context, dsn string) (store.Store, error) {
+	store.MustRegister("sqlite", func(_ context.Context, dsn string) (store.Store, error) {
 		return Open(dsn)
 	})
 }
