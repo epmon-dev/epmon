@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/epmon-dev/epmon/internal/store"
 	_ "modernc.org/sqlite"
@@ -23,7 +24,7 @@ var _ store.Store = (*Store)(nil)
 func init() {
 	// Self-registration: importing this package (even blank) makes the
 	// "sqlite" driver available to store.Open. No caller names this type.
-	store.Register("sqlite", func(_ context.Context, dsn string) (store.Store, error) {
+	store.MustRegister("sqlite", func(_ context.Context, dsn string) (store.Store, error) {
 		return Open(dsn)
 	})
 }
@@ -228,10 +229,10 @@ func (s *Store) Purge(ctx context.Context, retentionDays int, now time.Time) (in
 	return res.RowsAffected()
 }
 
-// CreateIncident opens a manual incident. Severity normalizes to minor
-// unless "major".
+// CreateIncident opens a manual incident. Empty severity normalizes to
+// minor; minor, major and critical round-trip verbatim.
 func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity string, now time.Time) (int64, error) {
-	if severity != "major" {
+	if severity != "major" && severity != "critical" {
 		severity = "minor"
 	}
 	res, err := s.db.ExecContext(ctx,
@@ -245,34 +246,54 @@ func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity s
 	return res.LastInsertId()
 }
 
-// UpdateIncident mutates title/severity/state; empty args keep the field.
+// UpdateIncident mutates title/severity/state in a single atomic UPDATE;
+// empty args keep the field. State moves are forward-only
+// (investigating -> monitoring -> resolved, skips legal); a backward move
+// is rejected with TransitionError instead of applied. Unknown id →
+// ErrNotFound.
+//
+// The transition guard lives in the UPDATE itself so concurrent PATCHes
+// cannot interleave a regression: every committed state move is forward
+// relative to the row at execution time. A rejected concurrent move fails
+// closed (retryable) rather than clobbering.
 func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error {
-	cur, err := s.GetIncident(ctx, id)
+	var current string
+	if err := s.db.QueryRowContext(ctx, `SELECT state FROM incidents WHERE id=?`, id).Scan(&current); err != nil {
+		if err == sql.ErrNoRows {
+			return store.ErrNotFound
+		}
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE incidents SET
+			title = CASE WHEN ? <> '' THEN ? ELSE title END,
+			severity = CASE WHEN ? IN ('minor','major','critical') THEN ? ELSE severity END,
+			state = CASE WHEN ? IN ('investigating','monitoring','resolved') THEN ? ELSE state END,
+			updated_at = ? WHERE id = ?
+			AND (? = '' OR ? = state OR ? NOT IN ('investigating','monitoring','resolved') OR
+				CASE ? WHEN 'investigating' THEN 0 WHEN 'monitoring' THEN 1 WHEN 'resolved' THEN 2 ELSE -1 END >
+				CASE state WHEN 'investigating' THEN 0 WHEN 'monitoring' THEN 1 WHEN 'resolved' THEN 2 ELSE -1 END)`,
+		title, title, severity, severity, state, state, now.Unix(), id,
+		state, state, state, state,
+	)
 	if err != nil {
 		return err
 	}
-	if cur == nil {
-		return store.ErrNotFound
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
 	}
-	if title != "" {
-		cur.Title = title
+	if n == 0 {
+		return &store.TransitionError{From: current, To: state}
 	}
-	if severity == "minor" || severity == "major" {
-		cur.Severity = severity
-	}
-	switch state {
-	case "investigating", "monitoring", "resolved":
-		cur.State = state
-	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE incidents SET title=?, severity=?, state=?, updated_at=? WHERE id=?`,
-		cur.Title, cur.Severity, cur.State, now.Unix(), id,
-	)
-	return err
+	return nil
 }
 
 // AddIncidentUpdate appends one timestamped line to an incident's thread.
 func (s *Store) AddIncidentUpdate(ctx context.Context, id int64, text string, now time.Time) error {
+	if n := utf8.RuneCountInString(text); n < 1 || n > store.MaxUpdateRunes {
+		return fmt.Errorf("%w: update text must be 1..%d characters", store.ErrInvalid, store.MaxUpdateRunes)
+	}
 	var exists int
 	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM incidents WHERE id=?`, id).Scan(&exists); err != nil {
 		if err == sql.ErrNoRows {

@@ -13,33 +13,49 @@ type stubStore struct {
 	dsn string
 }
 
-func TestRegistryOpen(t *testing.T) {
-	store.Register("stub-test", func(_ context.Context, dsn string) (store.Store, error) {
-		return &stubStore{dsn: dsn}, nil
-	})
+func stubOpener(dsn string) store.Opener {
+	return func(_ context.Context, got string) (store.Store, error) {
+		return &stubStore{dsn: got}, nil
+	}
+}
+
+// TestRegistryLifecycle covers the full adapter-author flow against an
+// isolated registry: register, duplicate (error, not panic), open, and
+// open-unknown.
+func TestRegistryLifecycle(t *testing.T) {
+	store.ResetForTest()
+	defer store.ResetForTest()
+
+	if err := store.Register("stub-test", stubOpener("")); err != nil {
+		t.Fatalf("Register = %v, want nil", err)
+	}
+	if err := store.Register("stub-test", stubOpener("")); err == nil ||
+		!strings.Contains(err.Error(), "duplicate driver") {
+		t.Errorf("duplicate Register = %v, want duplicate-driver error", err)
+	}
 	st, err := store.Open(context.Background(), "stub-test", "whatever")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	if got := st.(*stubStore).dsn; got != "whatever" {
-		t.Errorf("dsn = %q", got)
+		t.Errorf("dsn = %q, want whatever", got)
+	}
+	if _, err := store.Open(context.Background(), "no-such-driver", "x"); err == nil ||
+		!strings.Contains(err.Error(), "unknown driver") {
+		t.Errorf("Open unknown = %v, want unknown-driver error", err)
 	}
 }
 
-func TestRegistryUnknownDriver(t *testing.T) {
-	_, err := store.Open(context.Background(), "no-such-driver", "x")
-	if err == nil || !strings.Contains(err.Error(), "unknown driver") {
-		t.Errorf("expected unknown-driver error, got %v", err)
-	}
-}
+// TestMustRegisterPanics locks in the fail-fast init-time behavior.
+func TestMustRegisterPanics(t *testing.T) {
+	store.ResetForTest()
+	defer store.ResetForTest()
 
-func TestRegistryDuplicatePanics(t *testing.T) {
+	store.MustRegister("stub-test", stubOpener(""))
 	defer func() {
 		if recover() == nil {
-			t.Error("expected panic on duplicate registration")
+			t.Error("expected panic on duplicate MustRegister")
 		}
 	}()
-	store.Register("stub-test", func(_ context.Context, _ string) (store.Store, error) {
-		return &stubStore{}, nil
-	})
+	store.MustRegister("stub-test", stubOpener(""))
 }
