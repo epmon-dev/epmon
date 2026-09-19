@@ -1,8 +1,11 @@
 package prober
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,6 +113,29 @@ func TestProbeFollowRedirects(t *testing.T) {
 	expect301.ExpectStatus = spec
 	if c := Probe(t.Context(), expect301); !c.Up || c.StatusCode != 301 {
 		t.Errorf("expected 301 should be up, got %+v", c)
+	}
+}
+
+func TestProbeReusesConnections(t *testing.T) {
+	var conns atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("hello"))
+	}))
+	srv.Config.ConnContext = func(ctx context.Context, c net.Conn) context.Context {
+		conns.Add(1)
+		return ctx
+	}
+	srv.Start()
+	defer srv.Close()
+
+	s := svc(srv.URL)
+	for i := 0; i < 2; i++ {
+		if c := Probe(t.Context(), s); !c.Up || c.StatusCode != 200 {
+			t.Fatalf("probe %d: expected up, got %+v", i, c)
+		}
+	}
+	if got := conns.Load(); got != 1 {
+		t.Errorf("two sequential probes used %d connections, want 1 (keep-alive reuse)", got)
 	}
 }
 
