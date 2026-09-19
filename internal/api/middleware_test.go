@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/epmon-dev/epmon/internal/config"
+	"github.com/epmon-dev/epmon/internal/store"
 )
 
 func serverWith(t *testing.T, mutate func(*config.Server)) *Server {
@@ -156,6 +158,42 @@ func TestClientIP(t *testing.T) {
 	}
 	if got := clientIP(true, req); got != "203.0.113.9" {
 		t.Errorf("trusted XFF = %q", got)
+	}
+}
+
+// blockingStore simulates a wedged database: Ping never answers until
+// the caller's context ends.
+type blockingStore struct {
+	store.Store
+}
+
+func (blockingStore) Ping(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestHealthzBoundedPing asserts readiness fails fast (503) when the store
+// hangs, instead of hanging the probe connection with it.
+func TestHealthzBoundedPing(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.Server{MaxBodyBytes: 1 << 20},
+		Services: []config.Service{
+			{ID: "web", Name: "Web", URL: "https://example.com"},
+		},
+	}
+	srv := New(cfg, blockingStore{}, time.Now)
+	h := srv.Handler()
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("wedged store = %d, want 503", rec.Code)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("healthz took %v, want a fast 503", elapsed)
 	}
 }
 

@@ -160,8 +160,11 @@ func (s *Server) serveDocs(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	// Readiness, not just liveness: orchestration must stop routing here
-	// when the database is gone.
-	if err := s.store.Ping(r.Context()); err != nil {
+	// when the database is gone. The Ping gets its own short budget so a
+	// wedged store turns into a fast 503 instead of a hanging probe.
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := s.store.Ping(ctx); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "unavailable", "store unreachable")
 		return
 	}
