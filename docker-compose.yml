@@ -1,6 +1,15 @@
 services:
   epmon:
-    build: .
+    build:
+      context: .
+      args:
+        # Export these before composing, e.g.
+        # VERSION=$(git describe --tags --always --dirty) \
+        # COMMIT=$(git rev-parse --short HEAD) \
+        # DATE=$(date -u +%FT%TZ) docker compose up --build -d
+        VERSION: "${VERSION:-dev}"
+        COMMIT: "${COMMIT:-unknown}"
+        DATE: "${DATE:-unknown}"
     container_name: epmon
     restart: unless-stopped
     ports:

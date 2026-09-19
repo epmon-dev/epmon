@@ -50,6 +50,15 @@ docker compose up --build -d
 curl localhost:8080/healthz   # {"ok":true}
 ```
 
+Stamp release metadata into the image so it never reports `dev`:
+
+```sh
+VERSION=$(git describe --tags --always --dirty) \
+COMMIT=$(git rev-parse --short HEAD) \
+DATE=$(date -u +%FT%TZ) docker compose up --build -d
+docker exec epmon /epmon version   # epmon <version> (commit <sha>, built <date>, ...)
+```
+
 Interactive API reference lives at `/docs` once it's running; the raw
 contract at `/api/v1/openapi.yaml` (or `.json`).
 
