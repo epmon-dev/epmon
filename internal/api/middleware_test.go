@@ -1,13 +1,17 @@
 package api
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/epmon-dev/epmon/internal/config"
+	"github.com/epmon-dev/epmon/internal/store"
 )
 
 func serverWith(t *testing.T, mutate func(*config.Server)) *Server {
@@ -159,6 +163,42 @@ func TestClientIP(t *testing.T) {
 	}
 }
 
+// blockingStore simulates a wedged database: Ping never answers until
+// the caller's context ends.
+type blockingStore struct {
+	store.Store
+}
+
+func (blockingStore) Ping(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestHealthzBoundedPing asserts readiness fails fast (503) when the store
+// hangs, instead of hanging the probe connection with it.
+func TestHealthzBoundedPing(t *testing.T) {
+	cfg := &config.Config{
+		Server: config.Server{MaxBodyBytes: 1 << 20},
+		Services: []config.Service{
+			{ID: "web", Name: "Web", URL: "https://example.com"},
+		},
+	}
+	srv := New(cfg, blockingStore{}, time.Now)
+	h := srv.Handler()
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	elapsed := time.Since(start)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("wedged store = %d, want 503", rec.Code)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("healthz took %v, want a fast 503", elapsed)
+	}
+}
+
 func TestHealthzReadiness(t *testing.T) {
 	srv, st := testServer(t)
 	h := srv.Handler()
@@ -175,5 +215,38 @@ func TestHealthzReadiness(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("dead store = %d, want 503", rec.Code)
+	}
+}
+
+// TestLogRecordsOutcome asserts the access log carries the response status
+// on both success and failure paths (a closed store forces the 500).
+func TestLogRecordsOutcome(t *testing.T) {
+	srv, st := testServer(t)
+	h := Log(srv.Handler())
+
+	var buf strings.Builder
+	log.SetOutput(&buf)
+	defer log.SetOutput(os.Stderr)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/status", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/status", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("dead store status = %d, want 500", rec.Code)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "GET /api/v1/status 200 ") {
+		t.Errorf("log missing 200 line, got %q", out)
+	}
+	if !strings.Contains(out, "GET /api/v1/status 500 ") {
+		t.Errorf("log missing 500 line, got %q", out)
 	}
 }

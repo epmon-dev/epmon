@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/epmon-dev/epmon/internal/store"
 	_ "modernc.org/sqlite"
@@ -23,7 +24,7 @@ var _ store.Store = (*Store)(nil)
 func init() {
 	// Self-registration: importing this package (even blank) makes the
 	// "sqlite" driver available to store.Open. No caller names this type.
-	store.Register("sqlite", func(_ context.Context, dsn string) (store.Store, error) {
+	store.MustRegister("sqlite", func(_ context.Context, dsn string) (store.Store, error) {
 		return Open(dsn)
 	})
 }
@@ -239,10 +240,10 @@ func (s *Store) Purge(ctx context.Context, retentionDays int, now time.Time) (in
 	return res.RowsAffected()
 }
 
-// CreateIncident opens a manual incident. Severity normalizes to minor
-// unless "major".
+// CreateIncident opens a manual incident. Empty severity normalizes to
+// minor; minor, major and critical round-trip verbatim.
 func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity string, now time.Time) (int64, error) {
-	if severity != "major" {
+	if severity != "major" && severity != "critical" {
 		severity = "minor"
 	}
 	res, err := s.db.ExecContext(ctx,
@@ -256,34 +257,54 @@ func (s *Store) CreateIncident(ctx context.Context, serviceID, title, severity s
 	return res.LastInsertId()
 }
 
-// UpdateIncident mutates title/severity/state; empty args keep the field.
+// UpdateIncident mutates title/severity/state in a single atomic UPDATE;
+// empty args keep the field. State moves are forward-only
+// (investigating -> monitoring -> resolved, skips legal); a backward move
+// is rejected with TransitionError instead of applied. Unknown id →
+// ErrNotFound.
+//
+// The transition guard lives in the UPDATE itself so concurrent PATCHes
+// cannot interleave a regression: every committed state move is forward
+// relative to the row at execution time. A rejected concurrent move fails
+// closed (retryable) rather than clobbering.
 func (s *Store) UpdateIncident(ctx context.Context, id int64, title, severity, state string, now time.Time) error {
-	cur, err := s.GetIncident(ctx, id)
+	var current string
+	if err := s.db.QueryRowContext(ctx, `SELECT state FROM incidents WHERE id=?`, id).Scan(&current); err != nil {
+		if err == sql.ErrNoRows {
+			return store.ErrNotFound
+		}
+		return err
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE incidents SET
+			title = CASE WHEN ? <> '' THEN ? ELSE title END,
+			severity = CASE WHEN ? IN ('minor','major','critical') THEN ? ELSE severity END,
+			state = CASE WHEN ? IN ('investigating','monitoring','resolved') THEN ? ELSE state END,
+			updated_at = ? WHERE id = ?
+			AND (? = '' OR ? = state OR ? NOT IN ('investigating','monitoring','resolved') OR
+				CASE ? WHEN 'investigating' THEN 0 WHEN 'monitoring' THEN 1 WHEN 'resolved' THEN 2 ELSE -1 END >
+				CASE state WHEN 'investigating' THEN 0 WHEN 'monitoring' THEN 1 WHEN 'resolved' THEN 2 ELSE -1 END)`,
+		title, title, severity, severity, state, state, now.Unix(), id,
+		state, state, state, state,
+	)
 	if err != nil {
 		return err
 	}
-	if cur == nil {
-		return store.ErrNotFound
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
 	}
-	if title != "" {
-		cur.Title = title
+	if n == 0 {
+		return &store.TransitionError{From: current, To: state}
 	}
-	if severity == "minor" || severity == "major" {
-		cur.Severity = severity
-	}
-	switch state {
-	case "investigating", "monitoring", "resolved":
-		cur.State = state
-	}
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE incidents SET title=?, severity=?, state=?, updated_at=? WHERE id=?`,
-		cur.Title, cur.Severity, cur.State, now.Unix(), id,
-	)
-	return err
+	return nil
 }
 
 // AddIncidentUpdate appends one timestamped line to an incident's thread.
 func (s *Store) AddIncidentUpdate(ctx context.Context, id int64, text string, now time.Time) error {
+	if n := utf8.RuneCountInString(text); n < 1 || n > store.MaxUpdateRunes {
+		return fmt.Errorf("%w: update text must be 1..%d characters", store.ErrInvalid, store.MaxUpdateRunes)
+	}
 	var exists int
 	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM incidents WHERE id=?`, id).Scan(&exists); err != nil {
 		if err == sql.ErrNoRows {
@@ -315,6 +336,40 @@ func (s *Store) GetIncident(ctx context.Context, id int64) (*store.Incident, err
 
 // ListIncidents returns newest-first incidents matching the filter.
 func (s *Store) ListIncidents(ctx context.Context, f store.IncidentFilter) ([]store.Incident, error) {
+	conds, args := incidentConds(f)
+	filter := `ORDER BY i.created_at DESC, i.id DESC`
+	if len(conds) > 0 {
+		filter = "WHERE " + strings.Join(conds, " AND ") + " " + filter
+	}
+	if f.Limit > 0 {
+		filter += " LIMIT ?"
+		args = append(args, f.Limit)
+	}
+	if f.Offset > 0 {
+		if f.Limit <= 0 {
+			filter += " LIMIT -1"
+		}
+		filter += " OFFSET ?"
+		args = append(args, f.Offset)
+	}
+	return s.listIncidents(ctx, filter, args...)
+}
+
+// CountIncidents returns the total matches for the filter, ignoring paging.
+func (s *Store) CountIncidents(ctx context.Context, f store.IncidentFilter) (int, error) {
+	conds, args := incidentConds(f)
+	q := `SELECT COUNT(*) FROM incidents i`
+	if len(conds) > 0 {
+		q += " WHERE " + strings.Join(conds, " AND ")
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func incidentConds(f store.IncidentFilter) ([]string, []any) {
 	conds := []string{}
 	args := []any{}
 	if f.State != "" {
@@ -325,11 +380,7 @@ func (s *Store) ListIncidents(ctx context.Context, f store.IncidentFilter) ([]st
 		conds = append(conds, "i.service_id=?")
 		args = append(args, f.ServiceID)
 	}
-	filter := `ORDER BY i.created_at DESC, i.id DESC`
-	if len(conds) > 0 {
-		filter = "WHERE " + strings.Join(conds, " AND ") + " " + filter
-	}
-	return s.listIncidents(ctx, filter, args...)
+	return conds, args
 }
 
 func (s *Store) listIncidents(ctx context.Context, filter string, args ...any) ([]store.Incident, error) {
@@ -354,31 +405,50 @@ func (s *Store) listIncidents(ctx context.Context, filter string, args ...any) (
 		return nil, err
 	}
 	for i := range out {
-		updates, err := s.incidentUpdates(ctx, out[i].ID)
+		out[i].Updates = []store.Update{}
+	}
+	if len(out) > 0 {
+		threads, err := s.incidentThreads(ctx, out)
 		if err != nil {
 			return nil, err
 		}
-		out[i].Updates = updates
+		for i := range out {
+			if th, ok := threads[out[i].ID]; ok {
+				out[i].Updates = th
+			}
+		}
 	}
 	return out, nil
 }
 
-func (s *Store) incidentUpdates(ctx context.Context, incidentID int64) ([]store.Update, error) {
+// incidentThreads loads update threads for a page of incidents in one
+// query instead of one query per incident.
+func (s *Store) incidentThreads(ctx context.Context, incidents []store.Incident) (map[int64][]store.Update, error) {
+	ids := make([]any, 0, len(incidents))
+	for _, in := range incidents {
+		ids = append(ids, in.ID)
+	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT ts, text FROM incident_updates WHERE incident_id=? ORDER BY ts ASC, id ASC`,
-		incidentID,
+		`SELECT incident_id, ts, text FROM incident_updates WHERE incident_id IN (`+placeholders(len(ids))+`)
+		 ORDER BY incident_id ASC, ts ASC, id ASC`,
+		ids...,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	updates := []store.Update{}
+	out := map[int64][]store.Update{}
 	for rows.Next() {
+		var incidentID int64
 		var u store.Update
-		if err := rows.Scan(&u.TS, &u.Text); err != nil {
+		if err := rows.Scan(&incidentID, &u.TS, &u.Text); err != nil {
 			return nil, err
 		}
-		updates = append(updates, u)
+		out[incidentID] = append(out[incidentID], u)
 	}
-	return updates, rows.Err()
+	return out, rows.Err()
+}
+
+func placeholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
