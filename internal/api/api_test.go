@@ -183,7 +183,7 @@ func TestIncidentLifecycle(t *testing.T) {
 	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"severity":"major"}`); code != 400 {
 		t.Errorf("create without title = %d, want 400", code)
 	}
-	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"x","severity":"critical"}`); code != 400 {
+	if code, _, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"x","severity":"urgent"}`); code != 400 {
 		t.Errorf("create with bad severity = %d, want 400", code)
 	}
 
@@ -195,6 +195,13 @@ func TestIncidentLifecycle(t *testing.T) {
 	}
 	if code, _, _ := do(t, h, "PATCH", path, `{"state":"resolved"}`); code != 200 {
 		t.Errorf("resolve = %d", code)
+	}
+	// resolved is terminal: moving back out is a 409 naming the pair.
+	if code, body, _ := do(t, h, "PATCH", path, `{"state":"investigating"}`); code != 409 ||
+		body["error"].(map[string]any)["code"] != "conflict" {
+		t.Errorf("resolved->investigating = %d %v, want 409/conflict", code, body)
+	} else if msg := body["error"].(map[string]any)["message"].(string); !strings.Contains(msg, `"resolved"`) || !strings.Contains(msg, `"investigating"`) {
+		t.Errorf("conflict message = %q, want from→to pair named", msg)
 	}
 	if code, _, _ := do(t, h, "PATCH", path, `{}`); code != 400 {
 		t.Errorf("empty patch = %d, want 400", code)
@@ -228,6 +235,23 @@ func TestIncidentLifecycle(t *testing.T) {
 	code, body, _ = do(t, h, "GET", "/api/v1/incidents?service=other", "")
 	if code != 200 || body["total"] != float64(0) {
 		t.Errorf("filter service=other = %d %v", code, body)
+	}
+	code, body, _ = do(t, h, "GET", "/api/v1/incidents?state=bogus", "")
+	if code != 400 || body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Errorf("filter state=bogus = %d %v, want 400/bad_request", code, body)
+	}
+
+	// Update text is bounded to 1..2000 characters (runes), enforced in
+	// the store and surfaced as 400 here.
+	if code, body, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2001))); code != 400 || body["error"].(map[string]any)["code"] != "bad_request" {
+		t.Errorf("oversize update = %d %v, want 400/bad_request", code, body)
+	}
+	if code, _, _ := do(t, h, "POST", path+"/updates", fmt.Sprintf(`{"text":%q}`, strings.Repeat("a", 2000))); code != 201 {
+		t.Errorf("2000-char update = %d, want 201", code)
+	}
+	// critical round-trips end to end instead of downgrading to minor.
+	if code, body, _ := do(t, h, "POST", "/api/v1/incidents", `{"title":"Outage","severity":"critical"}`); code != 201 || body["severity"] != "critical" {
+		t.Errorf("create critical = %d %v, want 201/critical", code, body)
 	}
 }
 

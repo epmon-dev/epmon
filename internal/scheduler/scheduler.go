@@ -30,9 +30,12 @@ func New(cfg *config.Config, checks store.CheckRecorder, observe metrics.Observe
 	return &Scheduler{cfg: cfg, checks: checks, observe: observe}
 }
 
-// Run starts one loop per service plus the daily purge. It returns immediately.
+// Run starts one loop per enabled service plus the daily purge. It returns immediately.
 func (s *Scheduler) Run(ctx context.Context) {
 	for _, svc := range s.cfg.Services {
+		if !svc.EnabledOrDefault() {
+			continue
+		}
 		s.wg.Add(1)
 		go s.loop(ctx, svc)
 	}
@@ -46,14 +49,29 @@ func (s *Scheduler) Stop() { s.wg.Wait() }
 func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
 	defer s.wg.Done()
 	logger := newDownLogger()
+	// Consecutive-failure counting for failure_threshold: the raw probe is
+	// always stored, but the reported state flips to down only after
+	// threshold breaches in a row; any success resets the counter.
+	threshold := svc.FailureThreshold
+	if threshold < 1 {
+		threshold = 1
+	}
+	consecutive := 0
 	probe := func() {
 		check := prober.Probe(ctx, svc)
 		if err := s.checks.RecordCheck(ctx, check); err != nil {
 			log.Printf("epmon: record %s: %v", svc.ID, err)
 			return
 		}
-		s.observe.ObserveCheck(svc.ID, check.Up, check.LatencyMs)
-		logger.report(svc.ID, check.Up, check.Error)
+		stateUp := true
+		if !check.Up {
+			consecutive++
+			stateUp = consecutive < threshold
+		} else {
+			consecutive = 0
+		}
+		s.observe.ObserveProbe(svc.ID, check.Up, stateUp, time.Duration(check.LatencyMs)*time.Millisecond)
+		logger.report(svc.ID, stateUp, check.Error)
 	}
 	probe()
 	ticker := time.NewTicker(svc.Interval.Std())
