@@ -48,14 +48,29 @@ func (s *Scheduler) Stop() { s.wg.Wait() }
 
 func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
 	defer s.wg.Done()
+	// Consecutive-failure counting for failure_threshold: the raw probe is
+	// always stored, but the reported state flips to down only after
+	// threshold breaches in a row; any success resets the counter.
+	threshold := svc.FailureThreshold
+	if threshold < 1 {
+		threshold = 1
+	}
+	consecutive := 0
 	probe := func() {
 		check := prober.Probe(ctx, svc)
 		if err := s.checks.RecordCheck(ctx, check); err != nil {
 			log.Printf("epmon: record %s: %v", svc.ID, err)
 			return
 		}
-		s.observe.ObserveCheck(svc.ID, check.Up, check.LatencyMs)
+		stateUp := true
 		if !check.Up {
+			consecutive++
+			stateUp = consecutive < threshold
+		} else {
+			consecutive = 0
+		}
+		s.observe.ObserveProbe(svc.ID, check.Up, stateUp, time.Duration(check.LatencyMs)*time.Millisecond)
+		if !stateUp {
 			log.Printf("epmon: %s DOWN (%s)", svc.ID, check.Error)
 		}
 	}
