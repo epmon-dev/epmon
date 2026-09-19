@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,10 +165,18 @@ services:
 }
 
 func TestValidateEmptyExpectStatus(t *testing.T) {
-	// Unreachable via Load (empty lists take the default); Validate still guards it.
-	cfg := &Config{Services: []Service{{ID: "a", URL: "https://example.com"}}}
+	// Isolate the expect_status dimension: every other field is valid, so
+	// only an empty code list can fail validation.
+	cfg := Default()
+	cfg.Services = []Service{{
+		ID: "a", Name: "A", URL: "https://example.com", Method: "GET",
+		Interval: Duration(60 * time.Second), Timeout: Duration(10 * time.Second),
+		FailureThreshold: 1,
+	}}
 	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for empty expect_status")
+		t.Fatal("expected error for empty expect_status")
+	} else if got := err.Error(); !strings.Contains(got, "expect_status") {
+		t.Fatalf("error %q does not name expect_status", got)
 	}
 }
 
