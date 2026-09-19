@@ -91,7 +91,9 @@ type CheckReader interface {
 	LastCheck(ctx context.Context, serviceID string) (*Check, error)
 	RecentChecks(ctx context.Context, serviceID string, limit int) ([]Check, error)
 	// DailyHistory returns days oldest-first, nil Up for probeless days.
-	DailyHistory(ctx context.Context, serviceID string, days int, now time.Time) ([]DayBucket, error)
+	// Buckets are cut at local midnights in loc (history.timezone); a nil
+	// loc means UTC.
+	DailyHistory(ctx context.Context, serviceID string, days int, now time.Time, loc *time.Location) ([]DayBucket, error)
 }
 
 // IncidentFilter narrows ListIncidents. Empty fields disable that filter.

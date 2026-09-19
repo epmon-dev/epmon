@@ -175,37 +175,48 @@ func (s *Store) RecentChecks(ctx context.Context, serviceID string, limit int) (
 }
 
 // DailyHistory returns days oldest-first, nil Up for days without probes.
-func (s *Store) DailyHistory(ctx context.Context, serviceID string, days int, now time.Time) ([]store.DayBucket, error) {
+// Days are local calendar days in loc: hourly aggregates keep the query
+// small while absolute hour timestamps map to the correct local date
+// across DST transitions (23/25-hour days just work).
+func (s *Store) DailyHistory(ctx context.Context, serviceID string, days int, now time.Time, loc *time.Location) ([]store.DayBucket, error) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	y, m, d := now.In(loc).Date()
+	startOfToday := time.Date(y, m, d, 0, 0, 0, 0, loc)
+	start := startOfToday.AddDate(0, 0, -(days - 1))
 	byDay := map[string]struct {
 		up, n int
 	}{}
-	cutoff := now.AddDate(0, 0, -(days - 1))
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT CAST(ts/86400 AS INTEGER) AS day, SUM(up), COUNT(*)
-		 FROM checks WHERE service_id=? AND ts>=? GROUP BY day`,
-		serviceID, cutoff.Unix(),
+		`SELECT CAST(ts/3600 AS INTEGER) AS hour, SUM(up), COUNT(*)
+		 FROM checks WHERE service_id=? AND ts>=? GROUP BY hour`,
+		serviceID, start.Unix(),
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var day int64
+		var hour int64
 		var a struct {
 			up, n int
 		}
-		if err := rows.Scan(&day, &a.up, &a.n); err != nil {
+		if err := rows.Scan(&hour, &a.up, &a.n); err != nil {
 			return nil, err
 		}
-		date := time.Unix(day*86400, 0).UTC().Format("2006-01-02")
-		byDay[date] = a
+		date := time.Unix(hour*3600, 0).In(loc).Format("2006-01-02")
+		agg := byDay[date]
+		agg.up += a.up
+		agg.n += a.n
+		byDay[date] = agg
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	out := make([]store.DayBucket, 0, days)
-	for i := days - 1; i >= 0; i-- {
-		date := now.AddDate(0, 0, -i).UTC().Format("2006-01-02")
+	for i := 0; i < days; i++ {
+		date := start.AddDate(0, 0, i).Format("2006-01-02")
 		b := store.DayBucket{Date: date}
 		if a, ok := byDay[date]; ok && a.n > 0 {
 			up := float64(a.n-a.up)/float64(a.n) < dayDownRatio

@@ -58,7 +58,7 @@ func TestChecksAndHistory(t *testing.T) {
 		t.Fatalf("LastCheck missing = %v, %v", none, err)
 	}
 
-	hist, err := st.DailyHistory(ctx, "web", 3, now)
+	hist, err := st.DailyHistory(ctx, "web", 3, now, time.UTC)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +382,54 @@ func TestListIncidentsPaging(t *testing.T) {
 	all, err := st.ListIncidents(ctx, store.IncidentFilter{})
 	if err != nil || len(all) != 5 {
 		t.Fatalf("unbounded list = %d, %v; want 5", len(all), err)
+	}
+}
+
+// TestDailyHistoryTimezone cuts buckets at local midnights in the given
+// zone, including across the US fall-back transition (Nov 1 2026 has 25
+// hours in America/New_York). Probe A lands Oct 31 locally but Nov 1 in
+// UTC, distinguishing zoned bucketing from UTC bucketing.
+func TestDailyHistoryTimezone(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skipf("no tzdata for America/New_York: %v", err)
+	}
+	st := openTest(t)
+	ctx := t.Context()
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+
+	record := func(ts time.Time) {
+		t.Helper()
+		c := store.Check{ServiceID: "web", TS: ts.Unix(), Up: true, LatencyMs: 5, StatusCode: 200}
+		if err := st.RecordCheck(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(time.Date(2026, 11, 1, 3, 30, 0, 0, time.UTC)) // Oct 31 23:30 EDT
+	record(time.Date(2026, 11, 1, 5, 30, 0, 0, time.UTC)) // Nov 1 01:30 EDT
+	record(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)) // Nov 1 07:00 EST
+	record(time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)) // Nov 2 07:00 EST
+
+	hist, err := st.DailyHistory(ctx, "web", 3, now, loc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byDate := map[string]store.DayBucket{}
+	for _, b := range hist {
+		byDate[b.Date] = b
+	}
+	for date, wantChecks := range map[string]int{
+		"2026-10-31": 1,
+		"2026-11-01": 2,
+		"2026-11-02": 1,
+	} {
+		b, ok := byDate[date]
+		if !ok {
+			t.Fatalf("missing bucket %s in %+v", date, hist)
+		}
+		if b.Up == nil || !*b.Up || b.Checks != wantChecks {
+			t.Errorf("bucket %s = %+v, want up/%d", date, b, wantChecks)
+		}
 	}
 }
 
