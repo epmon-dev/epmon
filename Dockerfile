@@ -4,7 +4,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . ./
-RUN CGO_ENABLED=0 go build -trimpath -o /epmon ./cmd/epmon
+# Release metadata comes in as build args so images never report `dev`.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+RUN CGO_ENABLED=0 go build -trimpath \
+  -ldflags "-X main.version=$VERSION -X main.commit=$COMMIT -X main.date=$DATE" \
+  -o /epmon ./cmd/epmon
 
 FROM alpine:3.21
 RUN adduser -D -H epmon
