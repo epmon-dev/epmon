@@ -328,6 +328,16 @@ func intParam(raw string, min, max, def int) (v int, ok bool) {
 
 func (s *Server) listIncidents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	// state is a closed enum (see openapi.yaml); reject typos loudly
+	// instead of answering an empty list. service stays lenient: service
+	// ids are an open namespace (renamed/future services, platform-wide
+	// incidents), so unknown values legitimately match nothing.
+	switch q.Get("state") {
+	case "", "investigating", "monitoring", "resolved":
+	default:
+		writeErr(w, http.StatusBadRequest, "bad_request", "state must be investigating|monitoring|resolved")
+		return
+	}
 	incidents, err := s.store.ListIncidents(r.Context(), store.IncidentFilter{
 		State:     q.Get("state"),
 		ServiceID: q.Get("service"),
