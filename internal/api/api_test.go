@@ -255,6 +255,36 @@ func TestIncidentLifecycle(t *testing.T) {
 	}
 }
 
+func TestRemovedServiceHistory(t *testing.T) {
+	// Archive-on-remove: checks recorded for an id that is no longer in
+	// the catalogue stay readable in history, vanish from status, and
+	// never-seen ids still 404.
+	srv, st := testServer(t)
+	h := srv.Handler()
+	ctx := t.Context()
+
+	ts := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC).Unix()
+	if err := st.RecordCheck(ctx, store.Check{ServiceID: "ghost", TS: ts, Up: true, LatencyMs: 5, StatusCode: 200}); err != nil {
+		t.Fatal(err)
+	}
+
+	if code, body, _ := do(t, h, "GET", "/api/v1/services/ghost/history", ""); code != 200 || body["service_id"] != "ghost" {
+		t.Errorf("removed history = %d %v, want 200 for ghost", code, body)
+	}
+	if code, body, _ := do(t, h, "GET", "/api/v1/status", ""); code != 200 {
+		t.Fatalf("status = %d", code)
+	} else {
+		for _, svc := range body["services"].([]any) {
+			if svc.(map[string]any)["id"] == "ghost" {
+				t.Errorf("removed id still listed in status: %v", body)
+			}
+		}
+	}
+	if code, _, _ := do(t, h, "GET", "/api/v1/services/never-existed/history", ""); code != 404 {
+		t.Errorf("unknown history = %d, want 404", code)
+	}
+}
+
 func TestOpenAPISpecParity(t *testing.T) {
 	srv, _ := testServer(t)
 	h := srv.Handler()

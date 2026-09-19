@@ -268,8 +268,18 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !known {
-		writeErr(w, http.StatusNotFound, "not_found", "unknown service")
-		return
+		// Archive-on-remove (§4.4): a service deleted from the catalogue
+		// stops appearing in status, but its recorded history stays
+		// readable. Truly unknown ids (no checks ever) still 404.
+		last, err := s.store.LastCheck(r.Context(), id)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "internal", "store read failed")
+			return
+		}
+		if last == nil {
+			writeErr(w, http.StatusNotFound, "not_found", "unknown service")
+			return
+		}
 	}
 	q := r.URL.Query()
 	days, ok := intParam(q.Get("days"), 1, 365, 90)
