@@ -32,6 +32,13 @@ func Probe(ctx context.Context, svc config.Service) store.Check {
 		transport.TLSClientConfig.InsecureSkipVerify = true
 	}
 	client := &http.Client{Transport: transport, Timeout: svc.Timeout.Std()}
+	if !svc.FollowRedirectsOrDefault() {
+		// Surface the redirect response itself (status + headers) instead
+		// of the landing page, so expect_status asserts the configured URL.
+		client.CheckRedirect = func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, svc.Timeout.Std())
 	defer cancel()
