@@ -48,6 +48,7 @@ func (s *Scheduler) Stop() { s.wg.Wait() }
 
 func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
 	defer s.wg.Done()
+	logger := newDownLogger()
 	// Consecutive-failure counting for failure_threshold: the raw probe is
 	// always stored, but the reported state flips to down only after
 	// threshold breaches in a row; any success resets the counter.
@@ -70,9 +71,7 @@ func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
 			consecutive = 0
 		}
 		s.observe.ObserveProbe(svc.ID, check.Up, stateUp, time.Duration(check.LatencyMs)*time.Millisecond)
-		if !stateUp {
-			log.Printf("epmon: %s DOWN (%s)", svc.ID, check.Error)
-		}
+		logger.report(svc.ID, stateUp, check.Error)
 	}
 	probe()
 	ticker := time.NewTicker(svc.Interval.Std())
@@ -83,6 +82,40 @@ func (s *Scheduler) loop(ctx context.Context, svc config.Service) {
 			return
 		case <-ticker.C:
 			probe()
+		}
+	}
+}
+
+// downLogger keeps per-service failure logging informative at any probe
+// rate: transitions (up→down, down→up) always log, while a sustained
+// outage re-logs at most once a minute with the running count included.
+type downLogger struct {
+	known, lastUp bool
+	downs         int
+	lastLog       time.Time
+	now           func() time.Time
+}
+
+func newDownLogger() *downLogger { return &downLogger{now: time.Now} }
+
+func (l *downLogger) report(id string, up bool, errMsg string) {
+	now := l.now()
+	if !l.known || up != l.lastUp {
+		if !up {
+			l.downs = 1
+			log.Printf("epmon: %s DOWN (%s)", id, errMsg)
+		} else if l.known && l.downs > 0 {
+			log.Printf("epmon: %s UP (recovered after %d failed probes)", id, l.downs)
+			l.downs = 0
+		}
+		l.known, l.lastUp, l.lastLog = true, up, now
+		return
+	}
+	if !up {
+		l.downs++
+		if now.Sub(l.lastLog) >= time.Minute {
+			log.Printf("epmon: %s still DOWN (%d consecutive failures, last: %s)", id, l.downs, errMsg)
+			l.lastLog = now
 		}
 	}
 }
