@@ -30,9 +30,12 @@ func New(cfg *config.Config, checks store.CheckRecorder, observe metrics.Observe
 	return &Scheduler{cfg: cfg, checks: checks, observe: observe}
 }
 
-// Run starts one loop per service plus the daily purge. It returns immediately.
+// Run starts one loop per enabled service plus the daily purge. It returns immediately.
 func (s *Scheduler) Run(ctx context.Context) {
 	for _, svc := range s.cfg.Services {
+		if !svc.EnabledOrDefault() {
+			continue
+		}
 		s.wg.Add(1)
 		go s.loop(ctx, svc)
 	}
