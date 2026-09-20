@@ -14,6 +14,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
 
 FROM alpine:3.21
 RUN adduser -D -H epmon
+COPY --from=build /epmon /epmon
 USER epmon
 WORKDIR /data
 EXPOSE 8080
