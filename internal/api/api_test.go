@@ -107,7 +107,9 @@ func TestRoutingErrorsAreJSON(t *testing.T) {
 	srv, _ := testServer(t)
 	h := srv.Handler()
 
-	for _, path := range []string{"/nope", "/api/v1/nope", "/api/v2/status", "/api/status"} {
+	// Non-API unknowns ("/nope") serve the SPA shell when the status
+	// page is enabled; /api/* unknowns stay JSON. Both are pinned here.
+	for _, path := range []string{"/api/v1/nope", "/api/v2/status", "/api/status", "/api"} {
 		code, body, _ := do(t, h, "GET", path, "")
 		if code != 404 {
 			t.Errorf("GET %s = %d, want 404", path, code)
