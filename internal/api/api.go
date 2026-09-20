@@ -49,10 +49,15 @@ var openAPIYAML []byte
 // Server bundles config and storage for the handlers. Storage is the
 // store.Store port — any adapter (SQLite, Postgres, …) plugs in here.
 type Server struct {
-	cfg   *config.Config
-	store store.Store
-	now   func() time.Time
+	cfg     *config.Config
+	store   store.Store
+	now     func() time.Time
+	version string
 }
+
+// SetVersion stamps build identity for the /healthz version header
+// (see SECURITY.md reporting flow). Empty means "omit the header".
+func (s *Server) SetVersion(v string) { s.version = v }
 
 // New builds a Server. now is injectable for tests (nil = time.Now).
 func New(cfg *config.Config, st store.Store, now func() time.Time) *Server {
@@ -168,6 +173,9 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(ctx); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, "unavailable", "store unreachable")
 		return
+	}
+	if s.version != "" {
+		w.Header().Set("X-Epmon-Version", s.version)
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

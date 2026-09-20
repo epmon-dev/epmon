@@ -116,7 +116,9 @@ func runDefault(args []string, stdout, stderr io.Writer) int {
 
 	root := http.NewServeMux()
 	root.Handle("/metrics", registry.Handler())
-	root.Handle("/", api.New(cfg, st, nil).Handler())
+	apiSrv := api.New(cfg, st, nil)
+	apiSrv.SetVersion(version)
+	root.Handle("/", apiSrv.Handler())
 
 	srv := newHTTPServer(cfg, api.Log(root))
 	// serveErr carries a bind/serve failure back to runDefault so boot can
