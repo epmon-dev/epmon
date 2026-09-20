@@ -29,7 +29,7 @@ func svc(url string) config.Service {
 
 func TestProbeUp(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("hello world"))
+		_, _ = w.Write([]byte("hello world"))
 	}))
 	defer srv.Close()
 
@@ -47,7 +47,7 @@ func TestProbeUp(t *testing.T) {
 func TestProbeDownCases(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/missing-body" {
-			w.Write([]byte("nope"))
+			_, _ = w.Write([]byte("nope"))
 			return
 		}
 		w.WriteHeader(500)

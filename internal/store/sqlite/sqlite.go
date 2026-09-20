@@ -115,7 +115,7 @@ func (s *Store) SyncServices(ctx context.Context, services []store.ServiceMeta, 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	for _, svc := range services {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO services(id, name, url, updated_at) VALUES(?,?,?,?)
