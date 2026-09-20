@@ -37,12 +37,18 @@ func Handler() http.Handler {
 			return
 		}
 		p := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/"))
-		if p != "/" && exists(p) {
+		if p == "/" {
+			// The binary serves one core: land on its services, not
+			// the multi-tenant demo index.
+			http.Redirect(w, r, "/local", http.StatusFound)
+			return
+		}
+		if exists(p) {
 			cachePolicy(w, p)
 			fsrv.ServeHTTP(w, r)
 			return
 		}
-		// SPA fallback (and "/"): always the shell, never cached.
+		// SPA fallback: always the shell, never cached.
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		data, err := fs.ReadFile(files, "index.html")

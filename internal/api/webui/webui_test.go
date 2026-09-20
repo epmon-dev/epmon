@@ -33,8 +33,20 @@ func get(t *testing.T, path string) (int, http.Header, string) {
 	return rec.Code, rec.Header(), rec.Body.String()
 }
 
+func TestRootRedirectsToLocal(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("GET / = %d, want 302", rec.Code)
+	}
+	if loc := rec.Header().Get("Location"); loc != "/local" {
+		t.Errorf("GET / Location = %q, want /local", loc)
+	}
+}
+
 func TestIndexAndFallbackAreNoStoreHTML(t *testing.T) {
-	for _, path := range []string{"/", "/p/acme", "/s/status.example.com", "/nope", "/embed"} {
+	for _, path := range []string{"/local", "/p/acme", "/s/status.example.com", "/nope", "/embed"} {
 		code, header, body := get(t, path)
 		if code != 200 {
 			t.Errorf("GET %s = %d, want 200", path, code)

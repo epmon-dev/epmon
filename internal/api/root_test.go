@@ -36,8 +36,11 @@ func TestRootGating(t *testing.T) {
 		return rec.Code, rec.Body.String(), rec.Header()
 	}
 
-	if code, body, _ := serve(enabled, "/"); code != 200 || !strings.Contains(body, `<div id="root">`) {
-		t.Errorf("enabled / = %d, want the app shell", code)
+	if code, _, header := serve(enabled, "/"); code != 302 || header.Get("Location") != "/local" {
+		t.Errorf("enabled / = %d, want redirect to /local", code)
+	}
+	if code, body, _ := serve(enabled, "/local"); code != 200 || !strings.Contains(body, `<div id="root">`) {
+		t.Errorf("enabled /local = %d, want the app shell", code)
 	}
 	if code, body, _ := serve(enabled, "/p/acme"); code != 200 || !strings.Contains(body, `<div id="root">`) {
 		t.Errorf("enabled /p/acme = %d, want SPA fallback", code)
