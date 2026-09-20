@@ -193,8 +193,11 @@ service at one probe/minute over 90 days.
 - **Health & metrics:** point probes at `/healthz` (`HEALTHCHECK` is baked
   into the image); scrape `/metrics` and alert on
   `epmon_service_up == 0`.
-- **Data:** back up the SQLite file — hot copies while running are safe —
-  or mount the volume into your backup job.
+- **Data:** back up the SQLite file with the online backup — never a
+  plain `cp` of the live file, which can capture a torn write:
+  `sqlite3 /data/epmon.db ".backup '/backup/epmon-$(date -u +%FT%TZ).db'"`
+  (then `PRAGMA integrity_check` on restores), or mount the volume into
+  your backup job and back up from there.
 
 ## Metrics (`/metrics`, Prometheus text format)
 
