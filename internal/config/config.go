@@ -451,14 +451,15 @@ func DiscoverPath(flagPath string) string {
 	return ""
 }
 
-// Default returns built-in defaults with zero services.
+// Default returns built-in defaults with zero services. Each default-true
+// flag gets its own bool: sharing one address would let a file that sets
+// any single flag flip the others through the same pointer.
 func Default() *Config {
-	t := true
 	cfg := &Config{}
 	cfg.Server.Listen = ":8080"
 	cfg.Server.ReadTimeout = Duration(10 * time.Second)
 	cfg.Server.WriteTimeout = Duration(10 * time.Second)
-	cfg.Server.StatusPage.Enabled = &t
+	cfg.Server.StatusPage.Enabled = boolPtr(true)
 	cfg.Storage.BusyTimeoutMs = 5000
 	cfg.History.Timezone = "UTC"
 	cfg.API.MaxPageSize = 100
@@ -467,8 +468,8 @@ func Default() *Config {
 	cfg.Probes.FailureThreshold = 1
 	cfg.Probes.Concurrency = 64
 	cfg.Probes.MaxBodyBytes = 1 << 20
-	cfg.Probes.AutoIncidents = &t
-	cfg.Incidents.AutoResolve = &t
+	cfg.Probes.AutoIncidents = boolPtr(true)
+	cfg.Incidents.AutoResolve = boolPtr(true)
 	cfg.Logging.Level = "info"
 	cfg.Logging.Format = "json"
 	cfg.Database.Driver = "sqlite"
@@ -669,9 +670,7 @@ func (c *Config) applyDefaults() error {
 	if c.Incidents.AutoResolve != nil && !*c.Incidents.AutoResolve {
 		warnOncef("unimplemented:auto-resolve", "incidents.auto_resolve=false has no effect yet")
 	}
-	if c.Server.StatusPage.Enabled != nil && !*c.Server.StatusPage.Enabled {
-		warnOncef("unimplemented:status-page", "server.status_page.enabled=false has no effect yet")
-	}
+
 	if c.Server.Metrics.RequireAuth {
 		warnOncef("unimplemented:metrics-auth", "server.metrics.require_auth=true has no effect yet (/metrics stays public)")
 	}
