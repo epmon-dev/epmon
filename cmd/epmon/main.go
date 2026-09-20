@@ -1,7 +1,7 @@
 // Command epmon monitors HTTP endpoints from a YAML/JSON catalogue,
 // stores every probe in SQLite, and serves the results as JSON.
 //
-//	Usage: epmon [run|validate|healthcheck|version] [-config config.yaml]
+//	Usage: epmon [run|validate|healthcheck|version|init] [-config config.yaml]
 package main
 
 import (
@@ -51,8 +51,10 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return healthcheckEndpoint(args, stdout, stderr)
 	case "version":
 		return printVersion(stdout, stderr)
+	case "init":
+		return initCommand(args[1:], stdinReader(), stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "epmon: unknown command %q (want run|validate|healthcheck|version)\n", args[0])
+		fmt.Fprintf(stderr, "epmon: unknown command %q (want run|validate|healthcheck|version|init)\n", args[0])
 		return exitUsage
 	}
 }
@@ -256,6 +258,10 @@ var (
 	commit  = "unknown"
 	date    = "unknown"
 )
+
+// stdinReader is a seam so init's prompt loop stays testable; production
+// passes the real stdin through.
+func stdinReader() io.Reader { return os.Stdin }
 
 func main() {
 	os.Exit(execute(context.Background(), os.Args[1:], os.Stdout, os.Stderr))

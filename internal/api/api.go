@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/epmon-dev/epmon/internal/api/webui"
 	"github.com/epmon-dev/epmon/internal/config"
 	"github.com/epmon-dev/epmon/internal/store"
 	"gopkg.in/yaml.v3"
@@ -84,7 +85,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+prefix+"/openapi.yaml", s.serveSpecYAML)
 	mux.HandleFunc("GET "+prefix+"/openapi.json", s.serveSpecJSON)
 	mux.HandleFunc("GET /docs", s.serveDocs)
-	mux.HandleFunc("/", notFound)
+	mux.HandleFunc("/", s.root)
 
 	limiter := newRateLimiter(s.cfg.Server.RateLimitRPM, s.cfg.Server.RateLimitBurst)
 	var h http.Handler = mux
@@ -122,6 +123,23 @@ func writeErr(w http.ResponseWriter, httpCode int, code, msg string) {
 
 func notFound(w http.ResponseWriter, _ *http.Request) {
 	writeErr(w, http.StatusNotFound, "not_found", "unknown endpoint")
+}
+
+// root serves the embedded status UI (spec §9) when enabled; otherwise
+// the historical JSON 404. API routes always win — mux longest-match
+// routes them before this catch-all. Unknown /api/* paths stay JSON:
+// API clients must never receive the SPA shell.
+func (s *Server) root(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+	if p == "/api" || strings.HasPrefix(p, "/api/") {
+		notFound(w, r)
+		return
+	}
+	if s.cfg.StatusPageEnabled() {
+		webui.Handler().ServeHTTP(w, r)
+		return
+	}
+	notFound(w, r)
 }
 
 func (s *Server) serveSpecYAML(w http.ResponseWriter, _ *http.Request) {

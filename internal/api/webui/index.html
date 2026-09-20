@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Status pages are live data: never cache the HTML shell.
+         Hosting MUST also send `Cache-Control: no-store` on this document
+         and on /api/v1/* (spec §8.3, §9). The meta tag is a fallback only. -->
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <meta name="description" content="epmon.dev public status pages — honest uptime history, 90-day bars, active incidents." />
+    <title>epmon.dev status</title>
+    <!-- No-JS fallback: static snapshot refreshes every 60s (spec §9). -->
+    <noscript><meta http-equiv="refresh" content="60" /></noscript>
+    <script type="module" crossorigin src="/assets/index-5U1zY8sQ.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-CbXtAM7H.js">
+    <link rel="modulepreload" crossorigin href="/assets/react-Dy-GIXkn.js">
+    <link rel="modulepreload" crossorigin href="/assets/router-BUCJvZia.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-B4A9W0SC.css">
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>
+      <p style="font-family:system-ui,sans-serif;padding:2rem;text-align:center">
+        JavaScript is disabled — showing a static snapshot. This page refreshes
+        every 60 seconds. Live status is available at
+        <code>/api/v1/status</code> (Cache-Control: no-store).
+      </p>
+    </noscript>
+  </body>
+</html>

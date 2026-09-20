@@ -77,7 +77,7 @@ func TestAPIContractFromSpec(t *testing.T) {
 		{"GET", "/api/v1/openapi.yaml", "/api/v1/openapi.yaml", ""},
 		{"GET", "/api/v1/openapi.json", "/api/v1/openapi.json", ""},
 		{"GET", "/docs", "/docs", ""},
-		{"GET", "/nope", "/nope", ""},
+		{"GET", "/api/v1/nope", "/nope", ""},
 	}
 
 	covered := map[string]bool{}

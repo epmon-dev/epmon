@@ -84,6 +84,34 @@ services:
 	}
 }
 
+// TestDefaultFlagsAreIndependent guards a real aliasing bug: Default()
+// once handed the same *bool to StatusPage.Enabled, AutoIncidents and
+// AutoResolve, so a file setting status_page.enabled=false silently
+// flipped the other two through the shared address.
+func TestDefaultFlagsAreIndependent(t *testing.T) {
+	path := writeTemp(t, "config.yaml", `
+server:
+  status_page:
+    enabled: false
+services:
+  - id: web
+    url: https://example.com
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.StatusPageEnabled() {
+		t.Error("status page should be disabled")
+	}
+	if !cfg.AutoIncidentsOrDefault() {
+		t.Error("disabling the status page flipped probes.auto_incidents")
+	}
+	if !cfg.AutoResolveOrDefault() {
+		t.Error("disabling the status page flipped incidents.auto_resolve")
+	}
+}
+
 func TestLoadJSON(t *testing.T) {
 	path := writeTemp(t, "config.json", `{
 	  "services": [{"id": "a", "name": "A", "url": "http://localhost:1/", "interval": "30s"}]
