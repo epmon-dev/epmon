@@ -10,7 +10,7 @@ file, no accounts, no SaaS.
 
 - **Probe anything HTTP** — per-service interval, timeout, expected statuses,
   headers, body matching, self-signed TLS opt-in.
-- **Honest history** — every probe stored; days without data report `null`,
+- **Exact history** — every probe stored; days without data report `null`,
   never fake green; flap-tolerant day rollups.
 - **Incident log included** — open, narrate and resolve incidents via API.
 - **Deploy-ready** — bearer auth, rate limits, Prometheus metrics, readiness
