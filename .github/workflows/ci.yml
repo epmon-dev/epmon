@@ -42,3 +42,13 @@ jobs:
           go run ./cmd/epmon validate --config config.example.json
       - run: go vet ./...
       - run: go test -race ./...
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: image builds and runs
+        run: |
+          docker build -t epmon:ci .
+          docker run --rm --entrypoint /epmon epmon:ci version
+      - name: compose file parses
+        run: docker compose config
