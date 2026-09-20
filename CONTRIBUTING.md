@@ -3,7 +3,7 @@
 ## Ground rules
 
 - One binary, one database file, zero cgo. Dependencies need justification.
-- Honest history is the invariant: missing telemetry is `null`, never
+- Exact history is the invariant: missing telemetry is `null`, never
   interpolated. Any change that fabricates uptime will be rejected.
 - Headless-first: every mutation must work via the REST API. The embedded
   UI consumes the API; it never bypasses it.

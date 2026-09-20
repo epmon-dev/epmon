@@ -97,7 +97,7 @@ type IncidentUpdate struct {
 }
 
 // DayRollup is one calendar-day bucket. UptimePct, AvgLatencyMs and
-// P95LatencyMs are nil iff Total == 0 (honest null, never fabricated).
+// P95LatencyMs are nil iff Total == 0 (null, never fabricated).
 type DayRollup struct {
 	ServiceID    string   `json:"serviceId"`
 	Date         string   `json:"date"`
