@@ -23,7 +23,7 @@ COMPOSE     ?= $(shell if $(DOCKER) compose version >/dev/null 2>&1; then echo "
 PLATFORMS   := linux/amd64 linux/arm64 darwin/arm64 windows/amd64
 
 .PHONY: help build test test-race vet fmt lint check check-docs cross clean \
-	run init validate docker-build docker-version docker-run \
+	run init validate web docker-build docker-version docker-run \
 	compose-up compose-down compose-logs compose-config
 
 help:
@@ -41,6 +41,7 @@ help:
 	@echo '  run             go run ./cmd/epmon run $$ARGS'
 	@echo '  init            go run ./cmd/epmon init $$ARGS'
 	@echo '  validate        go run ./cmd/epmon validate $$ARGS'
+	@echo '  web             rebuild + vendor the status SPA (STATUS_DIR=../status)'
 	@echo '  docker-build    image epmon:$$VERSION with release metadata'
 	@echo "  docker-version  print the image's reported version"
 	@echo "  docker-run      run image foreground (override with ARGS)"
@@ -101,6 +102,11 @@ init:
 
 validate:
 	$(GO) run ./cmd/epmon validate $(ARGS)
+
+# Rebuild the status SPA from a status/ checkout (default: ../status)
+# and vendor it into internal/api/webui. Origin is stamped in source.txt.
+web:
+	STATUS_DIR="$${STATUS_DIR:-../status}" sh scripts/refresh-webui.sh
 
 docker-build:
 	$(DOCKER) build -t epmon:$(VERSION) \

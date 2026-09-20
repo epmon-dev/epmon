@@ -3,4 +3,4 @@ epmon.db*
 config.yaml
 config.json
 data/
-dist/
+/dist/
