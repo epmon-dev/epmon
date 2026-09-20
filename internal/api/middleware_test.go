@@ -199,6 +199,28 @@ func TestHealthzBoundedPing(t *testing.T) {
 	}
 }
 
+// TestHealthzVersionHeader asserts the SECURITY.md reporting flow:
+// a stamped server reports its build on /healthz, an unstamped one
+// omits the header entirely.
+func TestHealthzVersionHeader(t *testing.T) {
+	srv, _ := testServer(t)
+	srv.SetVersion("v9.9.9")
+	h := srv.Handler()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if got := rec.Header().Get("X-Epmon-Version"); got != "v9.9.9" {
+		t.Errorf("X-Epmon-Version = %q, want v9.9.9", got)
+	}
+
+	plain, _ := testServer(t)
+	rec = httptest.NewRecorder()
+	plain.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
+	if got := rec.Header().Get("X-Epmon-Version"); got != "" {
+		t.Errorf("X-Epmon-Version = %q, want absent when unset", got)
+	}
+}
+
 func TestHealthzReadiness(t *testing.T) {
 	srv, st := testServer(t)
 	h := srv.Handler()
