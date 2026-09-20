@@ -19,9 +19,8 @@ type thresholdObservation struct {
 
 // thresholdObserver captures every ObserveProbe call in order.
 type thresholdObserver struct {
-	mu   sync.Mutex
-	obs  []thresholdObservation
-	seen int
+	mu  sync.Mutex
+	obs []thresholdObservation
 }
 
 func (o *thresholdObserver) ObserveCheck(string, bool, int64) {}

@@ -1,4 +1,5 @@
 /epmon
 epmon.db*
 config.yaml
+config.json
 data/
