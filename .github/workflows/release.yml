@@ -1,0 +1,33 @@
+name: release
+# Tag vX.Y.Z → static binaries for the §G1 matrix, checksums, GitHub
+# release with generated notes. The tag is the single source of truth;
+# binaries are stamped with the tag, commit, and build date.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - name: build release binaries
+        run: make cross VERSION=${{ github.ref_name }} COMMIT=$(git rev-parse --short HEAD) DATE=$(date -u +%FT%TZ)
+      - name: verify stamped version
+        run: ./dist/epmon-linux-amd64 version | tee /dev/stderr | grep -qF "${{ github.ref_name }}"
+      - name: checksums
+        run: cd dist && sha256sum epmon-* > SHA256SUMS && cat SHA256SUMS
+      - name: create GitHub release
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          dist/epmon-* dist/SHA256SUMS
+          --title "${{ github.ref_name }}"
+          --generate-notes
+          --verify-tag
